@@ -1,5 +1,7 @@
 import { FerrylineError } from "@ferryline/core";
 
+import { FERRYLINE_SDK_USER_AGENT } from "../../version.js";
+
 /**
  * Circle Iris (attestation service) v2. Observed on production 2026-09-11 for real Stellar-source and
  * Stellar-destination messages (evidence/iris.mainnet.*.json):
@@ -76,7 +78,7 @@ type FetchLike = (
 export function createIrisClient(baseUrl: string, fetchFn: FetchLike = fetch): IrisClient {
   async function get(path: string): Promise<unknown> {
     const response = await fetchFn(`${baseUrl}${path}`, {
-      headers: { accept: "application/json" },
+      headers: { accept: "application/json", "user-agent": FERRYLINE_SDK_USER_AGENT },
     });
     if (response.status === 404) {
       return undefined;

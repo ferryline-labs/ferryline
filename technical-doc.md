@@ -39,7 +39,7 @@ Stellar now has two official ways to move dollars across chains: USDT0 over Laye
 The gaps are already on record, from SDF itself and from builders:
 
 - **SDF dev meeting · 30 Jul.** SDF's own CCTP walkthrough listed the gaps: limited tooling to make sure a trustline exists before minting, incomplete support for muxed addresses and smart accounts, and no inbound forwarding to Stellar.
-- **Circle docs.** Stellar supports Standard Transfer only (Fast Transfer is N/A). Circle's Forwarding Service isn't available for Stellar, so inbound transfers have to use `CctpForwarder` with hand-built hook data, and someone must submit `mint_and_forward`. Both `mintRecipient` and `destinationCaller` must be set to the forwarder or the funds are permanently stuck.
+- **Circle docs.** Fast Transfer is N/A for Stellar as the *source* chain (Stellar-originated burns use Standard Transfer only); Fast Transfer *into* Stellar is live — observed on mainnet at `minFinalityThreshold 1000`, executed at 1000, on a real Solana → Stellar transfer. Circle's Forwarding Service isn't available for Stellar, so inbound transfers have to use `CctpForwarder` with hand-built hook data, and someone must submit `mint_and_forward`. Both `mintRecipient` and `destinationCaller` must be set to the forwarder or the funds are permanently stuck.
 - **#developer-chat · 4 Sep.** A builder asked whether completing the CCTP mint is handled for them. Answer from the channel: it's the integrating team's job, running their own relayer around the clock.
 - **#developer-help.** Trustless Work opened a thread: "Fully automated CCTP bridge with Stellar as source: own relayer vs third-party?"
 - **#developer-chat · 3–4 Sep.** Lunar Finance had finished its USDT0 integration but was stuck waiting about two weeks for a LayerZero API key.
@@ -82,7 +82,7 @@ One interface for both rails: quote → build → sign → track.
 - Rail adapters: `usdt0-layerzero`, `usdc-cctp`
 - Decimal and dust handling (7 on Stellar, 6 shared)
 - Preflight checks: trustline, XLM for fees, recipient format
-- G / C / M address encoding, CCTP hook data
+- G / C / M address encoding for USDT0's bytes32 `to` field; CCTP hook data uses a different, length-prefixed strkey encoding for the real recipient (the bytes32 fields there carry only the forwarder's contract id)
 - Refuses to build an inbound burn unless both `mintRecipient` and `destinationCaller` are the `CctpForwarder` address (Circle: otherwise funds are permanently stuck)
 - Returns unsigned XDR, so it works with Stellar Wallets Kit, passkey and MPC wallets
 
@@ -312,7 +312,8 @@ This is the start of the threat model and monitoring plan SCF now requires. It g
 | Threat | Impact | Mitigation | Monitor |
 |---|---|---|---|
 | Inbound burn built with a `mintRecipient` or `destinationCaller` that is not the `CctpForwarder` | USDC permanently stuck (Circle docs) | SDK refuses to build the burn unless both fields equal the forwarder; integration test per source chain against the published forwarder address | Attestations with no matching relayer job |
-| Wrong recipient encoding (G/C/M → bytes32, hook data) | Funds sent to an address nobody controls | Round-trip encoding tests per chain; refuse unknown formats | Delivery-mismatch alerts |
+| Malformed recipient in CCTP hook data (the real recipient is a length-prefixed strkey, not bytes32) | Forwarder cannot resolve `forwardRecipient`; delivery fails | Round-trip hook-data tests per recipient kind (G/C/M); refuse unparseable strkeys before building | Delivery-mismatch alerts |
+| Wrong `to` encoding on USDT0 sends (Stellar↔EVM only; bytes32, left-padded) | Funds sent to an address nobody controls | Round-trip encoding tests per chain; refuse unknown formats | Delivery-mismatch alerts |
 | Missing trustline on the Stellar recipient | Failed or stuck delivery (`op_no_trust`) | Preflight check; add the trustline step when the user is on the Stellar side; relayer retry for CCTP; documented retry path for USDT0 once tested | Stuck-transfer queue age |
 | Relayer griefing: dust inbound transfers that make the sponsor pay mint fees | Sponsor XLM drained | Minimum forwarded amount; per-recipient and global rate limits; sponsorship of trustlines and accounts only for allow-listed integrators with a cap | Fee spend per transfer; jobs below threshold |
 | Relayer sponsor key compromised | Sponsor XLM drained | Minimal balance, hot/cold split, rate limits, rotation | Balance and spend-rate alerts |
@@ -392,3 +393,8 @@ Changes from draft 1:
 - API sketch tracks by a Ferryline-issued `transferId` instead of a transaction hash.
 - Widget narrowed to one render target (web component).
 - Renamed Ferry to Ferryline: "ferry" is taken on npm and GitHub; Ferryline is free on npm, GitHub, .dev and .xyz (checked 11 Sep).
+
+**Draft 3 (11 Sep 2026)** corrections from building the SDK's USDT0 and CCTP adapters against real mainnet data (`packages/core/VERIFIED.md`):
+
+- CCTP's "wrong recipient encoding" threat row split in two: the CCTP hook-data recipient is a length-prefixed strkey, not bytes32 (draft 2 conflated it with USDT0's `to` field, which *is* bytes32). The SDK bullet under "What we build" corrected the same way.
+- "Fast Transfer is N/A" for Stellar corrected to apply only to Stellar as the *source* chain. Fast Transfer *into* Stellar is live: observed on mainnet, a Solana → Stellar transfer at `minFinalityThreshold 1000` executed at 1000.

@@ -83,6 +83,10 @@ interface HarnessOptions {
   evm?: HandlerEvmReader;
   noEvm?: boolean;
   network?: "mainnet" | "testnet";
+  /** Record every sleep() delay instead of actually waiting; read back via the returned `sleeps` array. */
+  recordSleeps?: boolean;
+  pollIntervalMs?: number;
+  pollMaxIntervalMs?: number;
 }
 
 function evmReader(): HandlerEvmReader {
@@ -104,16 +108,29 @@ function harness(o: HarnessOptions = {}) {
   const evm = o.evm ?? evmReader();
   const store = new InMemoryTransferStore();
   const clock = { now: 1_700_000_000_000 };
+  const sleeps: number[] = [];
   const adapter = new UsdcCctpAdapter({
     network: o.network ?? "mainnet",
     stellarRpc: rpc,
     store,
     iris,
     ...(o.noEvm ? {} : { evmReaders: { base: evm, ethereum: evm, "base-sepolia": evm } }),
-    pollIntervalMs: 0,
+    pollIntervalMs: o.pollIntervalMs ?? 0,
+    ...(o.pollMaxIntervalMs === undefined ? {} : { pollMaxIntervalMs: o.pollMaxIntervalMs }),
+    ...(o.recordSleeps
+      ? {
+          sleep: (ms: number, signal?: AbortSignal) => {
+            sleeps.push(ms);
+            if (signal?.aborted) {
+              return Promise.reject(new Error("aborted"));
+            }
+            return Promise.resolve();
+          },
+        }
+      : {}),
     now: () => clock.now,
   });
-  return { adapter, rpc, iris, evm, store, clock };
+  return { adapter, rpc, iris, evm, store, clock, sleeps };
 }
 
 async function expectCode(
@@ -628,6 +645,32 @@ describe("track", () => {
       "delivered",
     ]);
     expect(statuses[1]?.detail).toContain("pending_confirmations");
+  });
+
+  it("Iris polling backs off exponentially from pollIntervalMs to pollMaxIntervalMs, not a flat interval", async () => {
+    const pending: IrisMessage = { ...irisComplete, status: "pending_confirmations" };
+    // Five non-terminal Iris responses before the sixth is complete: attempts 0..4 sleep, attempt 5 exits the loop.
+    const irisMessages = [[pending], [pending], [pending], [pending], [pending], [irisComplete]];
+    const evm = new HandlerEvmReader({
+      balanceOf: () => 10n ** 12n,
+      allowance: () => 0n,
+      usedNonces: () => 1n,
+    });
+    const { adapter, store, sleeps } = harness({
+      allowance: REAL_AMOUNT7,
+      irisMessages,
+      evm,
+      recordSleeps: true,
+      pollIntervalMs: 5_000,
+      pollMaxIntervalMs: 60_000,
+    });
+    const built = await adapter.build(await adapter.quote(outbound));
+    await store.markSubmitted(built.transferId, BURN_HASH);
+    await collect(adapter, built.transferId);
+    // The first two recorded sleeps are the (zero-length in this harness) store-wait and source-tx-confirmation
+    // waits, which use the flat pollMs(); the Iris loop's backoff sleeps follow.
+    const irisSleeps = sleeps.slice(-5);
+    expect(irisSleeps).toEqual([5_000, 10_000, 20_000, 40_000, 60_000]);
   });
 
   it("outbound: stops at verified when no EVM reader can confirm the mint", async () => {

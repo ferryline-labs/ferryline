@@ -29,6 +29,7 @@ import { Api } from "@stellar/stellar-sdk/rpc";
 import { Buffer } from "buffer";
 
 import { ERC20_ABI, EVM_ADDRESS, type EvmReader } from "../../evm/reader.js";
+import { backoffDelay, sleep as defaultSleep, type SleepFn } from "../../util/backoff.js";
 import {
   buildInvocation,
   getNativeBalance,
@@ -80,6 +81,10 @@ export interface CctpParameters {
 
 export const CCTP_PARAMETER_KEYS = ["maxFee", "minFinalityThreshold"] as const;
 
+const MAX_FEE_UNIT_NOTE =
+  " The unit of max_fee on the Stellar TokenMessengerMinter is unverified; Ferryline passes 7-decimal " +
+  "units, and if that is wrong the burn reverts on Stellar with nothing burned rather than silently overcharging.";
+
 const PARAMETERS_HELP =
   "usdc-cctp requires parameters.maxFee (decimal USDC string) and parameters.minFinalityThreshold (1000 or 2000) on every request. " +
   "Ferryline ships no defaults: neither value is verified end to end by this repo yet. " +
@@ -97,7 +102,7 @@ export function readCctpParameters(request: TransferRequest): {
   if (typeof rawFee !== "string") {
     throw new FerrylineError(
       "PARAMETER_INVALID",
-      'parameters.maxFee must be a decimal USDC string such as "0" or "0.25"',
+      `parameters.maxFee must be a decimal USDC string such as "0" or "0.25".${MAX_FEE_UNIT_NOTE}`,
     );
   }
   let maxFee: Amount;
@@ -106,7 +111,7 @@ export function readCctpParameters(request: TransferRequest): {
   } catch (error) {
     throw new FerrylineError(
       "PARAMETER_INVALID",
-      `parameters.maxFee is not a valid USDC amount: ${rawFee}`,
+      `parameters.maxFee is not a valid USDC amount: ${rawFee}.${MAX_FEE_UNIT_NOTE}`,
       { cause: error },
     );
   }
@@ -131,7 +136,12 @@ export interface UsdcCctpAdapterOptions {
   /** G account that pays fees and sequences the transaction when the sender is a C address. */
   readonly feeSourceAccount?: string;
   readonly quoteTtlMs?: number;
+  /** First polling delay for Iris and nonce checks; doubles each attempt. Default 5 s. */
   readonly pollIntervalMs?: number;
+  /** Ceiling for the backoff. Default 60 s. */
+  readonly pollMaxIntervalMs?: number;
+  /** Injected in tests to record delays instead of waiting. */
+  readonly sleep?: SleepFn;
   readonly now?: () => number;
   readonly newTransferId?: () => TransferId;
 }
@@ -188,6 +198,7 @@ const NATIVE_FEE_HEADROOM_STROOPS = 1_000_000n;
 const APPROVE_LEDGER_WINDOW = 1_000;
 const DEFAULT_QUOTE_TTL_MS = 60_000;
 const DEFAULT_POLL_MS = 5_000;
+const DEFAULT_POLL_MAX_MS = 60_000;
 
 function check(
   id: PreflightCheck["id"],
@@ -204,24 +215,6 @@ function usdc7(value: bigint): Amount {
 
 function usdc6(value: bigint): Amount {
   return { value, decimals: SHARED_DECIMALS };
-}
-
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(new Error("aborted"));
-      return;
-    }
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        reject(new Error("aborted"));
-      },
-      { once: true },
-    );
-  });
 }
 
 export class UsdcCctpAdapter implements RailAdapter {
@@ -339,7 +332,7 @@ export class UsdcCctpAdapter implements RailAdapter {
     if (sourceTxHash === undefined) {
       yield { transferId, stage: "created", updatedAt: this.now() };
       while (sourceTxHash === undefined) {
-        await sleep(this.pollMs(), signal);
+        await this.sleep(this.pollMs(), signal);
         sourceTxHash = (await this.options.store.get(transferId))?.sourceTxHash;
       }
     }
@@ -363,7 +356,7 @@ export class UsdcCctpAdapter implements RailAdapter {
         if (tx.status === Api.GetTransactionStatus.SUCCESS) {
           break;
         }
-        await sleep(this.pollMs(), signal);
+        await this.sleep(this.pollMs(), signal);
       }
     }
     yield {
@@ -377,7 +370,7 @@ export class UsdcCctpAdapter implements RailAdapter {
     // Attestation: Iris by source transaction hash. 404 means not indexed yet.
     let message: IrisMessage | undefined;
     let lastDetail = "";
-    for (;;) {
+    for (let attempt = 0; ; attempt += 1) {
       const messages = await this.iris.messagesByTx(ref.sourceDomain, sourceTxHash);
       message = messages[0];
       if (message && attestationComplete(message)) {
@@ -390,7 +383,7 @@ export class UsdcCctpAdapter implements RailAdapter {
         lastDetail = detail;
         yield { transferId, stage: "submitted", updatedAt: this.now(), sourceTxHash, detail };
       }
-      await sleep(this.pollMs(), signal);
+      await this.sleep(this.backoff(attempt), signal);
     }
     const nonce = message.eventNonce as `0x${string}`;
     await this.options.store.put({
@@ -420,7 +413,7 @@ export class UsdcCctpAdapter implements RailAdapter {
         };
         return;
       }
-      for (;;) {
+      for (let attempt = 0; ; attempt += 1) {
         const used = (await reader.readContract({
           address: dest.messageTransmitterV2,
           abi: MESSAGE_TRANSMITTER_V2_ABI,
@@ -437,11 +430,11 @@ export class UsdcCctpAdapter implements RailAdapter {
           };
           return;
         }
-        await sleep(this.pollMs(), signal);
+        await this.sleep(this.backoff(attempt), signal);
       }
     }
     const source = await this.sourceAccountFor(undefined);
-    for (;;) {
+    for (let attempt = 0; ; attempt += 1) {
       const used = await nonceUsed(
         this.ctx(source),
         this.cfg.messageTransmitter,
@@ -457,7 +450,7 @@ export class UsdcCctpAdapter implements RailAdapter {
         };
         return;
       }
-      await sleep(this.pollMs(), signal);
+      await this.sleep(this.backoff(attempt), signal);
     }
   }
 
@@ -1013,6 +1006,17 @@ export class UsdcCctpAdapter implements RailAdapter {
 
   private pollMs(): number {
     return this.options.pollIntervalMs ?? DEFAULT_POLL_MS;
+  }
+
+  private backoff(attempt: number): number {
+    return backoffDelay(attempt, {
+      initialMs: this.pollMs(),
+      maxMs: this.options.pollMaxIntervalMs ?? DEFAULT_POLL_MAX_MS,
+    });
+  }
+
+  private get sleep(): SleepFn {
+    return this.options.sleep ?? defaultSleep;
   }
 
   private newTransferId(): TransferId {
