@@ -3,9 +3,17 @@ packages:
   - "experiments"
 
 # pnpm >= 10 refuses to run dependency install scripts unless allow-listed. esbuild (via tsup) needs one.
+# cpu-features/ssh2/protobufjs are transitive to testcontainers (its optional SSH tunnel to a remote
+# Docker host); the relayer's integration tests only ever talk to a local Docker daemon, so their
+# native builds are declined rather than run unreviewed.
 allowBuilds:
+  cpu-features: false
   esbuild: true
+  protobufjs: false
+  ssh2: false
 
 # Written by pnpm's supply-chain policy: packages newer than minimumReleaseAge need an explicit exclusion.
 minimumReleaseAgeExclude:
   - fast-check@4.10.0
+  - fastify@5.12.4
+  - zod@4.6.2

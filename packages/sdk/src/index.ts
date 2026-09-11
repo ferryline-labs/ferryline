@@ -129,3 +129,20 @@ export { FerrylineError, InMemoryTransferStore } from "@ferryline/core";
 
 export * from "./rails/usdt0-layerzero/index.js";
 export * from "./rails/usdc-cctp/index.js";
+
+// Shared infrastructure other Ferryline services (the relayer) reuse rather than reimplement.
+export { backoffDelay, sleep, type BackoffOptions, type SleepFn } from "./util/backoff.js";
+export { SDK_VERSION, FERRYLINE_SDK_USER_AGENT } from "./version.js";
+export {
+  simulateView,
+  buildInvocation,
+  getTrustline,
+  getNativeBalance,
+  trustlineKey,
+  accountKey,
+  memoFitsText,
+  type StellarRpc,
+  type InvokeParams,
+  type BuiltInvocation,
+  type TrustlineState,
+} from "./stellar/rpc.js";

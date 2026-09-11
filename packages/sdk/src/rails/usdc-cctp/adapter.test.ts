@@ -28,7 +28,12 @@ import {
 } from "./fakes.test-support.js";
 import type { IrisFeeRow, IrisMessage } from "./iris.js";
 import { parseForwarderHookData } from "./message.js";
-import { DEPOSIT_FOR_BURN_ARGS, depositForBurnScVals } from "./stellar.js";
+import {
+  DEPOSIT_FOR_BURN_ARGS,
+  MINT_AND_FORWARD_ARGS,
+  depositForBurnScVals,
+  mintAndForwardScVals,
+} from "./stellar.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixture = JSON.parse(
@@ -458,8 +463,7 @@ describe("encoder conformance with the recorded mainnet interfaces", () => {
 
   it("the forwarder and transmitter entry points the relayer will call have the expected parameters", () => {
     expect(params("cctp-forwarder.mainnet.rs", "mint_and_forward")).toEqual([
-      "message",
-      "attestation",
+      ...MINT_AND_FORWARD_ARGS,
     ]);
     expect(params("cctp-message-transmitter.mainnet.rs", "is_nonce_used")).toEqual(["nonce"]);
   });
@@ -478,6 +482,21 @@ describe("encoder conformance with the recorded mainnet interfaces", () => {
       minFinalityThreshold: 2000,
     }).map((v) => v.toXDR("base64"));
     expect(encoded).toEqual(fixture.burnTransaction.args);
+  });
+
+  it("encodes mint_and_forward with a real observed Iris message and attestation, in the right order", () => {
+    const messageBytes = new Uint8Array(Buffer.from(irisComplete.message.slice(2), "hex"));
+    const attestationBytes = new Uint8Array(Buffer.from(irisComplete.attestation.slice(2), "hex"));
+    const [messageArg, attestationArg] = mintAndForwardScVals({
+      message: messageBytes,
+      attestation: attestationBytes,
+    });
+    expect(scValToNative(messageArg!) as Uint8Array).toEqual(messageBytes);
+    expect(scValToNative(attestationArg!) as Uint8Array).toEqual(attestationBytes);
+    // Positional order matters: message first, attestation second, matching the deployed signature.
+    expect(
+      mintAndForwardScVals({ message: messageBytes, attestation: attestationBytes }),
+    ).toHaveLength(2);
   });
 });
 

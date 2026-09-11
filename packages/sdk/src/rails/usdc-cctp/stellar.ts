@@ -2,6 +2,8 @@ import { Address, nativeToScVal, scValToNative } from "@stellar/stellar-sdk";
 import type { Account, xdr } from "@stellar/stellar-sdk";
 import { Buffer } from "buffer";
 
+import { FerrylineError } from "@ferryline/core";
+
 import { simulateView, type StellarRpc } from "../../stellar/rpc.js";
 
 /**
@@ -118,13 +120,53 @@ export function minFeeAmount(
   ]);
 }
 
-/** MessageTransmitter `is_nonce_used(nonce: BytesN<32>) -> bool`. */
+const NONCE_BYTES = 32;
+
+/**
+ * MessageTransmitter `is_nonce_used(nonce: BytesN<32>) -> bool`.
+ *
+ * The contract's parameter is a fixed-size 32-byte array, not the dynamic-length `Bytes` type.
+ * Verified 2026-09-11: a 31-byte value simulated against mainnet is rejected on-chain with
+ * `HostError: Error(WasmVm, InvalidAction)` — a confusing failure for what is, from the caller's
+ * side, a simple length mistake. Checking the length here turns that into a clear, immediate
+ * FerrylineError instead of a wasted RPC round-trip and an opaque VM trap.
+ */
 export function nonceUsed(
   ctx: ViewContext,
   messageTransmitter: string,
   nonce: Uint8Array,
 ): Promise<boolean> {
+  if (nonce.length !== NONCE_BYTES) {
+    throw new FerrylineError(
+      "PARAMETER_INVALID",
+      `is_nonce_used expects a ${String(NONCE_BYTES)}-byte nonce, got ${String(nonce.length)} bytes`,
+    );
+  }
   return view<boolean>(ctx, messageTransmitter, "is_nonce_used", [
     nativeToScVal(Buffer.from(nonce), { type: "bytes" }),
   ]);
+}
+
+/**
+ * Argument order of CctpForwarder.mint_and_forward on Stellar, verbatim from the mainnet interface
+ * dump (packages/core/verified/cctp-forwarder.mainnet.rs: `fn mint_and_forward(env, message: Bytes,
+ * attestation: Bytes)`). Two positional byte blobs; the real recipient never appears as a call
+ * argument here — it travels inside `message`'s hook data (see message.ts, buildForwarderHookData /
+ * parseForwarderHookData) and the forwarder resolves it on-chain. A test checks this list against
+ * the dump so the encoder cannot drift from the deployed contract silently.
+ */
+export const MINT_AND_FORWARD_ARGS = ["message", "attestation"] as const;
+
+export interface MintAndForwardArgs {
+  /** Raw CCTP message bytes, as returned by Iris (`message` field, 0x-prefixed hex). */
+  readonly message: Uint8Array;
+  /** Circle's attestation over that message, as returned by Iris (`attestation` field). */
+  readonly attestation: Uint8Array;
+}
+
+export function mintAndForwardScVals(a: MintAndForwardArgs): xdr.ScVal[] {
+  return [
+    nativeToScVal(Buffer.from(a.message), { type: "bytes" }),
+    nativeToScVal(Buffer.from(a.attestation), { type: "bytes" }),
+  ];
 }
