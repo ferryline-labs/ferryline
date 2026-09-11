@@ -1,0 +1,28 @@
+{
+  "name": "@ferryline/sdk",
+  "version": "0.0.0",
+  "description": "One interface for moving USDT0 and USDC in and out of Stellar: quote, build, sign, track.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "clean": "rm -rf dist .turbo"
+  },
+  "dependencies": {
+    "@ferryline/core": "workspace:*"
+  }
+}

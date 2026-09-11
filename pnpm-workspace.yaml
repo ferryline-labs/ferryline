@@ -1,0 +1,10 @@
+packages:
+  - "packages/*"
+
+# pnpm >= 10 refuses to run dependency install scripts unless allow-listed. esbuild (via tsup) needs one.
+allowBuilds:
+  esbuild: true
+
+# Written by pnpm's supply-chain policy: packages newer than minimumReleaseAge need an explicit exclusion.
+minimumReleaseAgeExclude:
+  - fast-check@4.10.0

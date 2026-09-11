@@ -1,0 +1,30 @@
+{
+  "name": "@ferryline/widget",
+  "version": "0.0.0",
+  "description": "Drop-in web component for depositing to and withdrawing from Stellar over Ferryline.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "clean": "rm -rf dist .turbo"
+  },
+  "dependencies": {
+    "@ferryline/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "happy-dom": "^20.14.3"
+  }
+}

@@ -1,0 +1,11 @@
+node_modules
+dist
+.turbo
+coverage
+pnpm-lock.yaml
+contracts/router/target
+CHANGELOG.md
+# Verbatim upstream quotes and the product spec are not reformatted.
+packages/core/VERIFIED.md
+packages/core/verified/
+technical-doc.md

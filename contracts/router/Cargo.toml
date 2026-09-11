@@ -1,0 +1,34 @@
+[package]
+name = "ferryline-router"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Soroban router so other contracts can send USDT0 or USDC cross-chain in one call."
+publish = false
+
+# Stand-alone cargo workspace; deliberately not part of the pnpm graph.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+doctest = false
+
+[dependencies]
+soroban-sdk = "27.0.6"
+
+[dev-dependencies]
+soroban-sdk = { version = "27.0.6", features = ["testutils"] }
+
+[profile.release]
+opt-level = "z"
+overflow-checks = true
+debug = 0
+strip = "symbols"
+debug-assertions = false
+panic = "abort"
+codegen-units = 1
+lto = true
+
+[profile.release-with-logs]
+inherits = "release"
+debug-assertions = true
