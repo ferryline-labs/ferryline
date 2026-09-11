@@ -1,4 +1,4 @@
-import { StrKey } from "@stellar/stellar-base";
+import { StrKey } from "@stellar/stellar-sdk/base";
 import { Buffer } from "buffer";
 
 import { FerrylineError } from "./errors.js";
@@ -158,9 +158,9 @@ const EVM_PAD_BYTES = 12;
 
 /**
  * 20-byte EVM address -> bytes32, left-padded with 12 zero bytes.
- * Proposed for review: this is the conventional `addressToBytes32` used by LayerZero
- * OFT `SendParam.to` and by CCTP on EVM. Not yet cross-checked against a Stellar->EVM
- * transfer on mainnet; see the open questions in the TASK 1-3 report.
+ * Verified 2026-09-11 against a real Stellar->Polygon USDT0 send: `SendParam.to` in mainnet tx
+ * 9d130f64… was 12 zero bytes + 0xe4b5fcce…301f, and the Polygon receipt shows 1.000000 USDT
+ * minted to exactly that address. See packages/core/VERIFIED.md §2.4.
  */
 export function evmAddressToBytes32(hex: string): Uint8Array {
   if (!EVM_ADDRESS.test(hex)) {

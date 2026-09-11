@@ -23,12 +23,18 @@ export interface TransferRequest {
   readonly from: ChainAddress;
   readonly to: ChainAddress;
   readonly amount: string;
+  /**
+   * Source-chain address that receives dust and fee refunds. Defaults to `from.address`.
+   * Adapters validate it at quote time and refuse to build without a valid one.
+   */
+  readonly refundAddress?: string;
 }
 
 export type PreflightCheckId =
   | "sender-format"
   | "recipient-format"
   | "recipient-trustline"
+  | "sender-trustline"
   | "sender-native-balance"
   | "sender-asset-balance"
   | "route-limits"
@@ -72,6 +78,8 @@ export interface Quote {
   readonly checks: readonly PreflightCheck[];
   /** Unix ms after which this quote must not be built. */
   readonly expiresAt: number;
+  /** Resolved source-chain refund address (see TransferRequest.refundAddress). */
+  readonly refundAddress: string;
 }
 
 /** One thing the user's wallet has to sign and submit. Steps run in order. */

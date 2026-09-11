@@ -1,0 +1,24 @@
+{
+  "name": "experiments",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Operator-run verification scripts. They hit live endpoints and can spend testnet assets. Not part of the test suite.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "exp:inbound-usdt0-no-trustline": "tsx inbound-usdt0-no-trustline.ts",
+    "exp:inbound-usdt0-c-address": "tsx inbound-usdt0-c-address.ts",
+    "exp:cctp-burn-max-fee-zero": "tsx cctp-burn-max-fee-zero.ts",
+    "exp:cctp-finality-threshold": "tsx cctp-finality-threshold.ts"
+  },
+  "dependencies": {
+    "@ferryline/core": "workspace:*",
+    "@stellar/stellar-sdk": "^17.0.1",
+    "viem": "^2.56.3",
+    "@ferryline/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.5"
+  }
+}

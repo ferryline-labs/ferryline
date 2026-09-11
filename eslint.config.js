@@ -32,6 +32,11 @@ export default tseslint.config(
     },
   },
   {
+    // Operator-run scripts talk to a terminal on purpose.
+    files: ["experiments/**/*.ts", "**/scripts/**/*.ts"],
+    rules: { "no-console": "off" },
+  },
+  {
     files: ["**/*.test.ts"],
     rules: {
       "@typescript-eslint/explicit-module-boundary-types": "off",

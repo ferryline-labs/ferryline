@@ -2,7 +2,7 @@
 
 Open-source toolkit for moving USDT0 and USDC between Stellar and other chains through the official 1:1 burn-and-mint rails: USDT0 over LayerZero, USDC over Circle's CCTP. Smart-account (C-address) wallets are a first-class concern, not an afterthought.
 
-**Status: pre-alpha.** `@ferryline/core` types and utilities exist. No rail adapter moves funds yet.
+**Status: pre-alpha.** `@ferryline/core` types and utilities exist, and `@ferryline/sdk` ships the first rail adapter, `usdt0-layerzero` (outbound Stellar → EVM with quote/build/track; inbound EVM → Stellar to G accounts only). It is tested against recorded mainnet responses and has not yet moved funds on a live chain from this repo. The CCTP rail, relayer logic and widget wiring are not started.
 
 ## What we build
 
@@ -59,6 +59,19 @@ stellar contract build
 ```
 
 Every upstream fact the code depends on (contract interfaces, addresses, hook-data layout) is recorded with its source and date in [packages/core/VERIFIED.md](packages/core/VERIFIED.md). The product spec and roadmap live in [technical-doc.md](technical-doc.md).
+
+### Experiments
+
+[experiments/](experiments/) holds operator-run scripts that hit live endpoints and can spend testnet or mainnet assets. They are not part of the test suite. Each writes a dated result file to [packages/core/verified/experiments/](packages/core/verified/experiments/) so the outcome can be read without re-running it, and each stops with `BLOCKED` when it lacks funds or keys instead of assuming a result.
+
+```sh
+pnpm --filter experiments exp:cctp-burn-max-fee-zero      # testnet; needs USDC on the operator account
+pnpm --filter experiments exp:cctp-finality-threshold     # testnet; needs USDC on the operator account
+pnpm --filter experiments exp:inbound-usdt0-no-trustline  # mainnet only (USDT0 has no testnet); needs explicit opt-in
+pnpm --filter experiments exp:inbound-usdt0-c-address     # mainnet only; needs explicit opt-in and a smart account
+```
+
+Recorded mainnet fixtures for the USDT0 adapter tests are regenerated (read-only) with `pnpm --filter @ferryline/sdk record:usdt0-fixtures`.
 
 ## License
 

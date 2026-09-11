@@ -1,0 +1,119 @@
+[
+ {
+  "chain": "arbitrum",
+  "eid": "30110",
+  "oft": "0x14e4a1b13bf7f943c8ff7c51fb60fa964a298d92",
+  "type": "OFT_ADAPTER",
+  "approvalRequired": false,
+  "innerToken": "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9",
+  "chainId": 42161
+ },
+ {
+  "chain": "bera",
+  "eid": "30362",
+  "oft": "0x3dc96399109df5ceb2c226664a086140bd0379cb",
+  "type": "OFT_ADAPTER",
+  "approvalRequired": false,
+  "innerToken": "0x779ded0c9e1022225f8e0630b35a9b54be713736",
+  "chainId": 80094
+ },
+ {
+  "chain": "ethereum",
+  "eid": "30101",
+  "oft": "0x6c96de32cea08842dcc4058c14d3aaad7fa41dee",
+  "type": "OFT_ADAPTER",
+  "approvalRequired": true,
+  "innerToken": "0xdac17f958d2ee523a2206206994597c13d831ec7",
+  "chainId": 1
+ },
+ {
+  "chain": "flare",
+  "eid": "30295",
+  "oft": "0x567287d2a9829215a37e3b88843d32f9221e7588",
+  "type": "OFT_ADAPTER",
+  "approvalRequired": false,
+  "innerToken": "0xe7cd86e13ac4309349f30b3435a9d337750fc82d",
+  "chainId": 14
+ },
+ {
+  "chain": "hyperliquid",
+  "eid": "30367",
+  "oft": "0x904861a24f30ec96ea7cfc3be9ea4b476d237e98",
+  "type": "OFT_ADAPTER",
+  "approvalRequired": false,
+  "innerToken": "0xb8ce59fc3717ada4c02eadf9682a9e934f625ebb",
+  "chainId": 999
+ },
+ {
+  "chain": "ink",
+  "eid": "30339",
+  "oft": "0x1cb6de532588fca4a21b7209de7c456af8434a65",
+  "type": "OFT_ADAPTER",
+  "approvalRequired": false,
+  "innerToken": "0x0200c29006150606b650577bbe7b6248f58470c1",
+  "chainId": 57073
+ },
+ {
+  "chain": "mp1",
+  "eid": "30331",
+  "oft": "0x3f82943338a8a76c35bfa0c1828aa27fd43a34e4",
+  "type": "OFT_ADAPTER",
+  "approvalRequired": false,
+  "innerToken": "0xb8ce59fc3717ada4c02eadf9682a9e934f625ebb",
+  "chainId": 21000000
+ },
+ {
+  "chain": "optimism",
+  "eid": "30111",
+  "oft": "0xf03b4d9ac1d5d1e7c4cef54c2a313b9fe051a0ad",
+  "type": "OFT_ADAPTER",
+  "approvalRequired": false,
+  "innerToken": "0x01bff41798a0bcf287b996046ca68b395dbc1071",
+  "chainId": 10
+ },
+ {
+  "chain": "polygon",
+  "eid": "30109",
+  "oft": "0x6ba10300f0dc58b7a1e4c0e41f5dabb7d7829e13",
+  "type": "OFT_ADAPTER",
+  "approvalRequired": false,
+  "innerToken": "0xc2132d05d31c914a87c6611c10748aeb04b58e8f",
+  "chainId": 137
+ },
+ {
+  "chain": "rootstock",
+  "eid": "30333",
+  "oft": "0x1a594d5d5d1c426281c1064b07f23f57b2716b61",
+  "type": "OFT_ADAPTER",
+  "approvalRequired": false,
+  "innerToken": "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
+  "chainId": 30
+ },
+ {
+  "chain": "sei",
+  "eid": "30280",
+  "oft": "0x56fe74a2e3b484b921c447357203431a3485cc60",
+  "type": "OFT_ADAPTER",
+  "approvalRequired": false,
+  "innerToken": "0x9151434b16b9763660705744891fa906f660ecc5",
+  "chainId": 1329
+ },
+ {
+  "chain": "unichain",
+  "eid": "30320",
+  "oft": "0xc07be8994d035631c36fb4a89c918cefb2f03ec3",
+  "type": "OFT_ADAPTER",
+  "approvalRequired": false,
+  "innerToken": "0x9151434b16b9763660705744891fa906f660ecc5",
+  "chainId": 130
+ },
+ {
+  "chain": "xlayer",
+  "eid": "30274",
+  "oft": "0x94bcca6bdfd6a61817ab0e960bfede4984505554",
+  "type": "OFT_ADAPTER",
+  "approvalRequired": false,
+  "innerToken": "0x779ded0c9e1022225f8e0630b35a9b54be713736",
+  "chainId": 196
+ }
+]

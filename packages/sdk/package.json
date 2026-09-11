@@ -20,9 +20,15 @@
     "build": "tsup",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
-    "clean": "rm -rf dist .turbo"
+    "clean": "rm -rf dist .turbo",
+    "record:usdt0-fixtures": "tsx scripts/record-usdt0-mainnet-fixtures.ts"
   },
   "dependencies": {
-    "@ferryline/core": "workspace:*"
+    "@ferryline/core": "workspace:*",
+    "@stellar/stellar-sdk": "^17.0.1",
+    "viem": "^2.56.3"
+  },
+  "devDependencies": {
+    "tsx": "^4.23.13"
   }
 }
