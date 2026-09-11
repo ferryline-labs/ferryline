@@ -351,6 +351,54 @@ this route), `quote_send` native_fee 3558611 stroops.
 
 ---
 
+## 3c. CCTP facts added while building the adapter (2026-09-11, phase 2b)
+
+- **Real Stellar-source burns, Iris production, 13 of 13 in the last ~6 days** ([evidence/iris.mainnet.stellar-source-burns.summary.json](verified/experiments/evidence/iris.mainnet.stellar-source-burns.summary.json)):
+  every one `status: "complete"`, `maxFee "0"`, `feeExecuted "0"`, `delayReason null`. Destinations: Base (6), Solana (5),
+  Polygon (7). Twelve requested `minFinalityThreshold 2000` and executed at 2000; **one requested 1000 and was executed
+  at 2000** (`d4337ce7…`, 1 USDC to Base). These are other operators' transactions, observed, not run by this repo.
+  They are evidence toward experiments 3 and 4 but the SDK still ships **no default** for either parameter.
+- **Real inbound messages to Stellar, 3 decoded** ([evidence/iris.mainnet.inbound-to-stellar.observed.json](verified/experiments/evidence/iris.mainnet.inbound-to-stellar.observed.json)):
+  `mintRecipient` bytes32 == CctpForwarder contract id in all three; hook data exactly `24 zero bytes | u32 0 | u32 56 | G… strkey`,
+  no trailing payload. Two were Standard (2000 -> 2000, fee 0). **One was a Fast Transfer into Stellar** (Solana -> Stellar,
+  1000 -> 1000, `maxFee 103849`, `feeExecuted 86541` on `865417222`, about 1 bps). So Fast Transfer *into* Stellar is live;
+  the chains table's "Fast N/A" applies to Stellar as source, where the one 1000 request was executed at 2000.
+- **Message layout** (Circle technical guide, developers.circle.com/cctp/references/technical-guide): header 148 bytes
+  `version u32 | sourceDomain u32 | destinationDomain u32 | nonce 32 | sender 32 | recipient 32 | destinationCaller 32 |
+  minFinalityThreshold u32 | finalityThresholdExecuted u32`, then BurnMessage body 228 bytes `version u32 | burnToken 32 |
+  mintRecipient 32 | amount u256 | messageSender 32 | maxFee u256 | feeExecuted u256 | expirationBlock u256 | hookData…`.
+  Cross-checked field by field against Circle's own `decodedMessage` for burn `150b5711…`. In that message
+  `header.sender` decodes to the TokenMessengerMinter contract id, `body.burnToken` to the USDC SAC, and
+  `body.messageSender` to the burner's G account; Circle returns those three as `null` ("the API cannot distinguish a
+  32-byte Stellar account from a contract"). `header.version 1`, `body.version 1`.
+- **A real `deposit_for_burn` invocation, decoded** (tx `150b5711…`, [sdk fixture](../sdk/src/rails/usdc-cctp/__fixtures__/mainnet-2026-09-11.json)):
+  `caller G…`, `amount 6458000000` (7-decimal; the message carried 645800000 at 6), `destination_domain 6`,
+  `mint_recipient` = 12 zero bytes + EVM address, `burn_token` = USDC SAC, `destination_caller` = 32 zero bytes,
+  `max_fee 0`, `min_finality_threshold 2000`. No memo. Resource fee 43101 stroops. A test encodes the same call with
+  the adapter's encoder and asserts byte-identical XDR.
+- **Iris v2 API, observed** (production): `GET /v2/messages/{sourceDomain}?transactionHash=…` and `?nonce=0x…` both return
+  `{ messages: [{ message, eventNonce, attestation, cctpVersion: 2, status, delayReason, decodedMessage }], sourceTxHash }`;
+  unknown transaction -> HTTP 404 `{"error":"Message not found for provided parameters"}`. Python's default user agent is
+  rejected with 403; curl and Node fetch are fine. **Only `status: "complete"` has been observed (17 messages); Circle's
+  technical guide lists the endpoints but does not enumerate status or delayReason values.** The adapter treats any other
+  status as "attestation pending" and surfaces it verbatim.
+- **Fees** (developers.circle.com/cctp/concepts/fees): "Standard Transfers are free"; the fee is deducted from the amount
+  when USDC is minted on the destination; `maxFee` caps it and "if the actual fee exceeds your specified maxFee, the
+  transaction will revert on the source blockchain, and no USDC will be burned". `minimumFee` is in basis points.
+- **`is_nonce_used` semantics:** on Stellar's MessageTransmitter it answers for *inbound* messages (the outbound burn's
+  nonce reads `false` there; it is consumed on the destination). The adapter checks delivery on the destination's
+  transmitter accordingly: EVM `MessageTransmitterV2.usedNonces(bytes32)` for Stellar -> EVM, Stellar `is_nonce_used`
+  for EVM -> Stellar.
+- **EVM contracts** (developers.circle.com/cctp/references/contract-addresses): TokenMessengerV2 `0x28b5a0e9C621a5BadaA536219b3a228C8168cf5d`
+  and MessageTransmitterV2 `0x81D40F21F12A8F0E3252Bccb954D722d4c464B64` on Ethereum (0), Arbitrum (3), Base (6), Polygon (7)
+  mainnet; testnet `0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA` / `0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275`. Both are
+  EIP-1967 proxies. **Selectors verified in the implementation bytecode on Base mainnet:** `depositForBurnWithHook(uint256,uint32,bytes32,address,bytes32,uint256,uint32,bytes)`
+  = `779b432d` and `depositForBurn(…)` = `8e0250ee` in TokenMessengerV2 impl `0x555e2725…`; `receiveMessage(bytes,bytes)`
+  = `57ecfd28`, `usedNonces(bytes32)` = `feb61724`, `localDomain()` = `8d3638f4` in MessageTransmitterV2 impl `0x7db629f6…`.
+  USDC addresses from developers.circle.com/stablecoins/usdc-contract-addresses.
+- `TokenMessengerMinter.get_min_fee_amount(USDC, 1 USDC) = 0` and `paused() = false` on mainnet; `MessageTransmitter.paused() = false`,
+  `get_local_domain() = 27` (read-only simulations, recorded in the sdk fixture).
+
 ## 4. Not yet verified (do not build on these)
 
 Status after phase 2. The experiment scripts under `experiments/` exist for each item; their dated result files
@@ -362,10 +410,15 @@ substituted with an assumption.
 2. **Inbound USDT0 with no trustline, and whether delivery is retried after the trustline is added**: unresolved.
    Needs a mainnet run of `experiments/inbound-usdt0-no-trustline.ts`. The SDK's inbound quote fails the
    `recipient-trustline` check and `build()` refuses.
-3. **`min_finality_threshold` accepted for Stellar-as-source**: unresolved beyond the fee API listing. Needs
-   `experiments/cctp-finality-threshold.ts` with testnet USDC. No default ships.
-4. **`max_fee = 0` accepted end to end**: consistent with `get_min_fee = 0` and the fee API, but no burn has been
-   attested. Needs `experiments/cctp-burn-max-fee-zero.ts` with testnet USDC. No default ships.
+3. **`min_finality_threshold` accepted for Stellar-as-source**: not run by this repo. Observed on mainnet (§3c): 2000 is
+   accepted and executed at 2000; one 1000 request was accepted and executed at 2000. Needs
+   `experiments/cctp-finality-threshold.ts` with testnet USDC for a first-party result. No default ships.
+4. **`max_fee = 0` accepted end to end**: not run by this repo. Observed on mainnet (§3c): 13 of 13 recent burns used
+   `maxFee 0` and were attested `complete` with `feeExecuted 0`. Needs `experiments/cctp-burn-max-fee-zero.ts` for a
+   first-party result. No default ships.
+4b. **Unit of `max_fee` on the Stellar TokenMessengerMinter**: every observed burn passed 0, so 6- versus 7-decimal units
+   are unverified. The adapter converts the caller's USDC amount to 7 decimals (the same units as `amount`), which is
+   the safe direction if wrong: a too-large cap cannot increase the fee Circle charges, a too-small one only reverts.
 5. **LayerZero Scan status vocabulary** beyond `DELIVERED`.
 6. **EVM-side `send` calldata** (`IOFT_ABI` in the SDK) has not been executed against a live chain by this repo.
 7. **SCF #46 deadline** and the Discord quotes in the technical doc (not code-relevant).

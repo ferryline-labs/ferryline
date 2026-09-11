@@ -2,7 +2,7 @@
 
 Open-source toolkit for moving USDT0 and USDC between Stellar and other chains through the official 1:1 burn-and-mint rails: USDT0 over LayerZero, USDC over Circle's CCTP. Smart-account (C-address) wallets are a first-class concern, not an afterthought.
 
-**Status: pre-alpha.** `@ferryline/core` types and utilities exist, and `@ferryline/sdk` ships the first rail adapter, `usdt0-layerzero` (outbound Stellar → EVM with quote/build/track; inbound EVM → Stellar to G accounts only). It is tested against recorded mainnet responses and has not yet moved funds on a live chain from this repo. The CCTP rail, relayer logic and widget wiring are not started.
+**Status: pre-alpha.** `@ferryline/core` types and utilities exist, and `@ferryline/sdk` ships two rail adapters: `usdt0-layerzero` (outbound Stellar → EVM with quote/build/track; inbound EVM → Stellar to G accounts only) and `usdc-cctp` (outbound as a two-transaction approve + `deposit_for_burn` with the burn assembled by `prepareStep` once the approve confirms; inbound as an EVM `depositForBurnWithHook` step builder that always targets the CctpForwarder; tracking through Circle's Iris attestation and the destination's nonce). Both are tested against recorded mainnet responses and neither has moved funds on a live chain from this repo. `usdc-cctp` requires `parameters.maxFee` and `parameters.minFinalityThreshold` on every request and ships no defaults. The relayer service and widget wiring are not started.
 
 ## What we build
 

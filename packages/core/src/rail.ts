@@ -28,6 +28,11 @@ export interface TransferRequest {
    * Adapters validate it at quote time and refuse to build without a valid one.
    */
   readonly refundAddress?: string;
+  /**
+   * Rail-specific parameters the adapter validates. Core does not interpret them. Each adapter
+   * documents and exports the keys it requires; a missing required key throws PARAMETER_REQUIRED.
+   */
+  readonly parameters?: Readonly<Record<string, unknown>>;
 }
 
 export type PreflightCheckId =
@@ -74,7 +79,8 @@ export interface Quote {
   /** Portion of the requested amount that cannot be moved at shared precision. Never dropped silently. */
   readonly dust: Amount;
   readonly fees: readonly Fee[];
-  readonly etaSeconds: number;
+  /** Absent when the rail has no observed timing to base an estimate on. Never a made-up number. */
+  readonly etaSeconds?: number;
   readonly checks: readonly PreflightCheck[];
   /** Unix ms after which this quote must not be built. */
   readonly expiresAt: number;
@@ -82,13 +88,25 @@ export interface Quote {
   readonly refundAddress: string;
 }
 
-/** One thing the user's wallet has to sign and submit. Steps run in order. */
+/**
+ * One thing the user's wallet has to sign and submit. Steps run in order. A deferred step cannot be
+ * assembled until the step it depends on has been confirmed on-chain (Soroban footprints come from
+ * simulation, and a simulation that depends on state written by an earlier step fails until that
+ * state exists). Call `RailAdapter.prepareStep` to turn it into a signable step.
+ */
 export type TransferStep =
   | {
       readonly chain: "stellar";
       readonly kind: "stellar-transaction";
       /** Base64 transaction envelope XDR, unsigned. */
       readonly xdr: string;
+      readonly description: string;
+    }
+  | {
+      readonly chain: "stellar";
+      readonly kind: "stellar-transaction-deferred";
+      /** Index of the step that must be confirmed first. */
+      readonly dependsOn: number;
       readonly description: string;
     }
   | {
@@ -138,4 +156,9 @@ export interface RailAdapter {
   build(quote: Quote): Promise<BuiltTransfer>;
   /** Yields status updates until a terminal stage ("delivered" or "failed") or the signal aborts. */
   track(transferId: TransferId, signal?: AbortSignal): AsyncIterable<TransferStatus>;
+  /**
+   * Assemble a deferred step once its prerequisite is confirmed. Throws STEP_NOT_READY (or a more
+   * specific code such as ALLOWANCE_INSUFFICIENT) when the chain state it needs is not there yet.
+   */
+  prepareStep?(transferId: TransferId, stepIndex: number): Promise<TransferStep>;
 }

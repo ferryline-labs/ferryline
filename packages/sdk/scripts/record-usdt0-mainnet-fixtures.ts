@@ -12,7 +12,7 @@ import { Api, Server } from "@stellar/stellar-sdk/rpc";
 
 import { Client as OftClient } from "../src/rails/usdt0-layerzero/generated/oft.js";
 import { USDT0_STELLAR_MAINNET as M } from "../src/rails/usdt0-layerzero/chains.js";
-import { accountKey, trustlineKey } from "../src/rails/usdt0-layerzero/stellar.js";
+import { accountKey, trustlineKey } from "../src/stellar/rpc.js";
 
 const RPC_URL = "https://mainnet.sorobanrpc.com";
 /** Sender of mainnet tx 9d130f64… (1 USDT0 to Polygon on 2026-09-04). Public data only. */

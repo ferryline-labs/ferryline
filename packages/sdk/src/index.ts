@@ -6,6 +6,7 @@ import type {
   TransferId,
   TransferRequest,
   TransferStatus,
+  TransferStep,
   TransferStore,
 } from "@ferryline/core";
 import { FerrylineError, InMemoryTransferStore } from "@ferryline/core";
@@ -58,6 +59,19 @@ export class Ferryline {
 
   async build(quote: Quote): Promise<BuiltTransfer> {
     return await this.adapterByRail(quote.rail).build(quote);
+  }
+
+  /** Assemble a deferred step (see TransferStep) once the step it depends on is confirmed. */
+  async prepareStep(transferId: TransferId, stepIndex: number): Promise<TransferStep> {
+    const record = await this.store.get(transferId);
+    if (!record) {
+      throw new FerrylineError("TRANSFER_UNKNOWN", `no transfer with id ${transferId}`);
+    }
+    const adapter = this.adapterByRail(record.rail);
+    if (!adapter.prepareStep) {
+      throw new FerrylineError("ROUTE_UNSUPPORTED", `rail "${record.rail}" has no deferred steps`);
+    }
+    return await adapter.prepareStep(transferId, stepIndex);
   }
 
   /** Tell Ferryline which hash the wallet got back after submitting the first step. */
@@ -114,3 +128,4 @@ export type {
 export { FerrylineError, InMemoryTransferStore } from "@ferryline/core";
 
 export * from "./rails/usdt0-layerzero/index.js";
+export * from "./rails/usdc-cctp/index.js";
