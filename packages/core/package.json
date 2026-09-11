@@ -23,7 +23,7 @@
     "clean": "rm -rf dist .turbo"
   },
   "dependencies": {
-    "@stellar/stellar-base": "^15.0.0",
+    "@stellar/stellar-sdk": "^17.0.1",
     "buffer": "^6.0.3",
     "ulidx": "^2.4.1"
   },

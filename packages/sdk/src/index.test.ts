@@ -38,6 +38,7 @@ class FakeUsdt0Adapter implements RailAdapter {
       etaSeconds: 60,
       checks: [],
       expiresAt: Number.MAX_SAFE_INTEGER,
+      refundAddress: r.from.address,
     });
   }
 

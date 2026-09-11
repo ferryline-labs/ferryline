@@ -9,3 +9,5 @@ CHANGELOG.md
 packages/core/VERIFIED.md
 packages/core/verified/
 technical-doc.md
+packages/sdk/src/rails/usdt0-layerzero/generated/
+packages/sdk/src/rails/usdt0-layerzero/__fixtures__/

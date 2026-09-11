@@ -271,15 +271,101 @@ pub struct RateLimitConfig { pub limit: i128, pub mode: Mode, pub window_seconds
 
 ---
 
+### 2.4 A real send, decoded (added 2026-09-11, phase 2)
+
+Mainnet transaction `9d130f64b3a4a9316222f8d7e246fe6992225e9438d45ca573e61540f8495f8a` (ledger 64288127), fetched
+over RPC and decoded with `stellar xdr decode`; saved at
+[verified/experiments/evidence/stellar-tx.mainnet.9d130f64.decoded.json](verified/experiments/evidence/stellar-tx.mainnet.9d130f64.decoded.json):
+
+```
+send(
+  from            = GBBFBZR6OSK5RPZMOMRIODZH6TKOKEIENFBD54DB66G2UWAJOTSAZS3Z,
+  send_param      = { amount_ld: 10000000, min_amount_ld: 10000000, dst_eid: 30109 (Polygon),
+                      to: 000000000000000000000000e4b5fcce3cfbc86fdbb9fae472b14eea68fb301f,
+                      extra_options: "", compose_msg: "", oft_cmd: "" },
+  fee             = { native_fee: 3720767, zro_fee: 0 },
+  refund_address  = GBBFBZR6OSK5RPZMOMRIODZH6TKOKEIENFBD54DB66G2UWAJOTSAZS3Z )
+memo: none · tx fee: 99857 stroops
+```
+
+- **`to` encoding verified.** `to` is 12 zero bytes followed by the 20-byte EVM address. The Polygon receipt for
+  the destination transaction `0x35fea5be…` ([evidence/polygon-receipt.0x35fea5be.json](verified/experiments/evidence/polygon-receipt.0x35fea5be.json))
+  shows an ERC-20 `Transfer` of `1000000` (1.000000 USDT, 6 decimals) from `0x0` to exactly
+  `0xe4b5fcce3cfbc86fdbb9fae472b14eea68fb301f`. `evmAddressToBytes32` in core matches this and is exported.
+- **Decimals verified end to end:** 10000000 stroops (7 dec) debited on Stellar, 1000000 (6 dec) minted on Polygon.
+- `refund_address` was simply the sender; `extra_options` empty is accepted (enforced options exist on the OFT).
+- **LayerZero Scan** (`GET https://scan.layerzero-api.com/v1/messages/tx/{hash}`, no key) indexes Stellar hashes:
+  [evidence/layerzero-scan.mainnet.9d130f64.json](verified/experiments/evidence/layerzero-scan.mainnet.9d130f64.json).
+  Observed shape: `data[]` of `{ guid, status: { name, message }, pathway: { srcEid, dstEid, sender, receiver, nonce },
+  source: { status, tx }, destination: { status, tx }, verification: { dvn } }`. Observed status name: `DELIVERED`
+  ("Executor transaction confirmed"). Time from Stellar ledger close to executor confirmation: 1834 s and 1838 s
+  for the two recorded sends. The status vocabulary beyond DELIVERED is **not** verified by this repo (the Scan
+  docs page could not be fetched); the adapter maps unknown names to "submitted".
+- **Volume note:** RPC `getEvents` on the OFT over the last ~100k ledgers (about a week) returned five `oft_sent`
+  events and no `oft_received` events.
+
+### 2.5 USDT0 deployments and the absence of a testnet (added 2026-09-11, phase 2)
+
+- docs.usdt0.to/technical-documentation/deployments lists Stellar mainnet only: LZ EID 30600, Token
+  `CBSJZEIO…R26YF`, OFT `CBOWOLFS…MMF6`, OneSig `CBCZ5CETG3XR5MZVDC7QBDOTIH6P7MOLUH2SSC52J3NVBYIV45D4QKR6`,
+  classic asset `USDT0:GATISXX…HN6Q`. No testnet chain of any kind appears on that page.
+- LayerZero's public OFT list (`metadata.layerzero-api.com/v1/metadata/experiment/ofts/list?symbols=USDT0`, no key)
+  returns `{}` for `chainNames=stellar-testnet`. Horizon testnet lists 13 unrelated issuers of an asset coded
+  "USDT0". **Conclusion: USDT0 cannot be exercised on Stellar testnet.** The adapter refuses `network: "testnet"`.
+- The 13-chain USDT0 mesh Stellar is peered with (per the entry whose Polygon deployment `0x6ba1…` is the receiver
+  Scan reports) and its endpoint ids are pinned in `packages/sdk/src/rails/usdt0-layerzero/chains.ts`, recorded at
+  [evidence/usdt0-mesh.layerzero-metadata.json](verified/experiments/evidence/usdt0-mesh.layerzero-metadata.json).
+  Only Ethereum's OFT adapter has `approvalRequired = true`.
+- LayerZero does run a Stellar testnet endpoint: eid `40600`, EndpointV2
+  `CALTBA5S6GRJEHAXFP45LGGLKWWAF7HTZCPNUBUJF2HWWRRLQNV35AIV` (deployments metadata). No USDT0 OFT is attached to it.
+
+### 2.6 Recorded mainnet responses used by the adapter tests
+
+`packages/sdk/src/rails/usdt0-layerzero/__fixtures__/mainnet-2026-09-11.json`, produced by
+`pnpm --filter @ferryline/sdk record:usdt0-fixtures` (read-only simulations, nothing signed or submitted):
+`is_paused`, `approval_required`, `shared_decimals`, `decimal_conversion_rate`, `peer(30109)`, `peer(4242)`,
+`has_oft_fee(30109)`, `quote_oft`, `quote_send`, SAC `balance`, a full `send` simulation (minResourceFee 98605,
+one auth entry), the sender's trustline and account ledger entries, and `getTransaction` for the send above.
+Decoded: `quote_oft` limit min 0 / max 18446744073709551615, receipt sent == received == 12345670 (no bps fee on
+this route), `quote_send` native_fee 3558611 stroops.
+
+---
+
+## 3b. CCTP facts added in phase 2 (2026-09-11)
+
+- **`get_min_fee(USDC) = 0`** on both networks (read-only simulation against TokenMessengerMinter; USDC SAC ids
+  derived with `stellar contract id asset`: mainnet `CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75`,
+  testnet `CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA`; issuers from Circle's USDC address page:
+  mainnet `GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN`, testnet
+  `GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5`).
+- **Circle fee API** (`GET /v2/burn/USDC/fees/{src}/{dst}`, sandbox and production agree): out of Stellar (27 -> 0/3/6)
+  both thresholds 1000 and 2000 are listed with `minimumFee 0`; into Stellar (0/3/6 -> 27) threshold 1000 carries
+  `minimumFee` 1 to 1.4 and 2000 is 0. Listed is not the same as accepted.
+- **Stellar-source burns use the allowance model.** Read-only simulations of `deposit_for_burn` on mainnet and
+  testnet stop at `USDC.transfer_from(TokenMessengerMinter, caller, TokenMessengerMinter, amount)` with
+  "not enough allowance to spend". A burn is therefore `approve` then `deposit_for_burn`, two transactions.
+  Those simulations never reached the fee or threshold checks, so they say nothing about `max_fee` or
+  `min_finality_threshold`.
+- The MessageTransmitter interface is committed at
+  [verified/cctp-message-transmitter.mainnet.rs](verified/cctp-message-transmitter.mainnet.rs).
+
+---
+
 ## 4. Not yet verified (do not build on these)
 
-1. **Inbound USDT0 `to` semantics.** How the Stellar OFT turns the 32-byte `to` into a Stellar address
-   when Stellar is the destination (ed25519 account vs contract id is ambiguous in 32 bytes), and whether a
-   muxed recipient is possible at all on this rail. Not on S4, S5, S6 or S7. Needs the OFT source or a
-   testnet transfer before the LayerZero adapter handles inbound.
-2. **`min_finality_threshold` when Stellar is the destination.** S3 says Fast Transfer is N/A for Stellar,
-   yet S1's example still exposes 1000/2000. Unknown whether 1000 is rejected, ignored, or charged.
-3. **`max_fee` for Stellar-source burns.** S3 shows "Upfront Fees ❌" for Stellar. What value the
-   TokenMessengerMinter expects, and whether Circle charges a Standard Transfer fee on this route.
-4. **USDC token contract address on Stellar** (not on S2).
-5. **SCF #46 deadline** and the Discord quotes in the technical doc (not code-relevant).
+Status after phase 2. The experiment scripts under `experiments/` exist for each item; their dated result files
+live in [verified/experiments/](verified/experiments/). All four are **BLOCKED** on operator assets, none was
+substituted with an assumption.
+
+1. **Inbound USDT0 `to` semantics for C addresses** and **muxed recipients**: unresolved. Needs a mainnet run of
+   `experiments/inbound-usdt0-c-address.ts`. The SDK throws `UNSUPPORTED_RECIPIENT_KIND` for C and M inbound.
+2. **Inbound USDT0 with no trustline, and whether delivery is retried after the trustline is added**: unresolved.
+   Needs a mainnet run of `experiments/inbound-usdt0-no-trustline.ts`. The SDK's inbound quote fails the
+   `recipient-trustline` check and `build()` refuses.
+3. **`min_finality_threshold` accepted for Stellar-as-source**: unresolved beyond the fee API listing. Needs
+   `experiments/cctp-finality-threshold.ts` with testnet USDC. No default ships.
+4. **`max_fee = 0` accepted end to end**: consistent with `get_min_fee = 0` and the fee API, but no burn has been
+   attested. Needs `experiments/cctp-burn-max-fee-zero.ts` with testnet USDC. No default ships.
+5. **LayerZero Scan status vocabulary** beyond `DELIVERED`.
+6. **EVM-side `send` calldata** (`IOFT_ABI` in the SDK) has not been executed against a live chain by this repo.
+7. **SCF #46 deadline** and the Discord quotes in the technical doc (not code-relevant).

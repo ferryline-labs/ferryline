@@ -1,4 +1,4 @@
-import { Account, MuxedAccount, StrKey } from "@stellar/stellar-base";
+import { Account, MuxedAccount, StrKey } from "@stellar/stellar-sdk/base";
 import { Buffer } from "buffer";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
