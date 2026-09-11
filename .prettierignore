@@ -11,3 +11,4 @@ packages/core/verified/
 technical-doc.md
 packages/sdk/src/rails/usdt0-layerzero/generated/
 packages/sdk/src/rails/usdt0-layerzero/__fixtures__/
+packages/sdk/src/rails/usdc-cctp/__fixtures__/

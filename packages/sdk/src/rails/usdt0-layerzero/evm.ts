@@ -1,6 +1,9 @@
 import { encodeFunctionData, parseAbi } from "viem";
 
 import type { EvmUsdt0Chain } from "./chains.js";
+import { ERC20_ABI, EVM_ADDRESS, type EvmReader } from "../../evm/reader.js";
+
+export { ERC20_ABI, EVM_ADDRESS, type EvmReader };
 
 /**
  * LayerZero V2 IOFT surface Ferryline uses, per the USDT0 developer guide (docs.usdt0.to, checked
@@ -20,23 +23,6 @@ export const IOFT_ABI = parseAbi([
   "function approvalRequired() view returns (bool)",
   "function token() view returns (address)",
 ]);
-
-export const ERC20_ABI = parseAbi([
-  "function approve(address spender, uint256 amount) returns (bool)",
-  "function allowance(address owner, address spender) view returns (uint256)",
-  "function balanceOf(address owner) view returns (uint256)",
-]);
-
-/** The slice of a viem PublicClient the adapter reads through. Tests substitute fakes. */
-export interface EvmReader {
-  readContract(args: {
-    address: `0x${string}`;
-    abi: typeof IOFT_ABI | typeof ERC20_ABI;
-    functionName: string;
-    args?: readonly unknown[];
-  }): Promise<unknown>;
-  getBalance(args: { address: `0x${string}` }): Promise<bigint>;
-}
 
 export interface EvmSendParam {
   readonly dstEid: number;
@@ -114,5 +100,3 @@ export function encodeSend(
     ],
   });
 }
-
-export const EVM_ADDRESS = /^0x[0-9a-fA-F]{40}$/;

@@ -5,6 +5,7 @@ import {
   accountAddressToBytes32,
   evmAddressToBytes32,
   formatAmount,
+  formatStellarAddress,
   newTransferId,
   parseAmount,
   parseStellarAddress,
@@ -54,7 +55,7 @@ import {
   memoFitsText,
   simulateView,
   type StellarRpc,
-} from "./stellar.js";
+} from "../../stellar/rpc.js";
 
 export interface Usdt0AdapterOptions {
   /** USDT0 exists on Stellar mainnet only (checked 2026-09-11). */
@@ -777,7 +778,13 @@ export class Usdt0LayerZeroAdapter implements RailAdapter {
   // ---------------------------------------------------------------- helpers
 
   private resolveStellarRefund(request: TransferRequest): string {
-    return this.assertStellarRefund(request.refundAddress ?? request.from.address);
+    const sender = parseStellarAddress(request.from.address);
+    // A muxed sender cannot sign (its check fails), but its refunds belong to the underlying account.
+    const defaultRefund =
+      sender.kind === "muxed"
+        ? formatStellarAddress({ kind: "account", key: sender.key })
+        : request.from.address;
+    return this.assertStellarRefund(request.refundAddress ?? defaultRefund);
   }
 
   private assertStellarRefund(candidate: string): string {

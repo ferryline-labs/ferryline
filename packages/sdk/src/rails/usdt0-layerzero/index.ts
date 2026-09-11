@@ -12,5 +12,5 @@ export {
   type ScanClient,
   type ScanMessage,
 } from "./scan.js";
-export type { StellarRpc } from "./stellar.js";
+export type { StellarRpc } from "../../stellar/rpc.js";
 export type { EvmReader } from "./evm.js";
