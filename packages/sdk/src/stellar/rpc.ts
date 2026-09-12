@@ -130,4 +130,3 @@ export async function getNativeBalance(
   const entry = response.entries[0];
   return entry?.val.type === "account" ? entry.val.account.balance : undefined;
 }
-
