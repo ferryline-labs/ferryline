@@ -410,12 +410,18 @@ substituted with an assumption.
 2. **Inbound USDT0 with no trustline, and whether delivery is retried after the trustline is added**: unresolved.
    Needs a mainnet run of `experiments/inbound-usdt0-no-trustline.ts`. The SDK's inbound quote fails the
    `recipient-trustline` check and `build()` refuses.
-3. **`min_finality_threshold` accepted for Stellar-as-source**: not run by this repo. Observed on mainnet (§3c): 2000 is
-   accepted and executed at 2000; one 1000 request was accepted and executed at 2000. Needs
-   `experiments/cctp-finality-threshold.ts` with testnet USDC for a first-party result. No default ships.
-4. **`max_fee = 0` accepted end to end**: not run by this repo. Observed on mainnet (§3c): 13 of 13 recent burns used
-   `maxFee 0` and were attested `complete` with `feeExecuted 0`. Needs `experiments/cctp-burn-max-fee-zero.ts` for a
-   first-party result. No default ships.
+3. ~~**`min_finality_threshold` accepted for Stellar-as-source**: not run by this repo.~~
+   **RESOLVED 2026-09-12, see §5's revision-history entry and
+   [verified/experiments/2026-09-12-cctp-finality-threshold.md](verified/experiments/2026-09-12-cctp-finality-threshold.md).**
+   Both `1000` and `2000` are accepted on-chain with a real, first-party burn; `2000` executes as
+   requested, `1000` is silently executed at `2000` (matching the mainnet observation in §3c, now
+   confirmed rather than merely observed). No default ships, this finding is a reason to keep
+   requiring the parameter explicitly, not a reason to add one, see §5.
+4. ~~**`max_fee = 0` accepted end to end**: not run by this repo.~~ **RESOLVED 2026-09-12, see §5's
+   revision-history entry and
+   [verified/experiments/2026-09-12-cctp-burn-max-fee-zero.md](verified/experiments/2026-09-12-cctp-burn-max-fee-zero.md).**
+   Confirmed accepted end to end with a real, first-party burn: on-chain success and a real Circle
+   attestation with `feeExecuted: "0"`. No default ships, see §5 for why.
 4b. **Unit of `max_fee` on the Stellar TokenMessengerMinter**: every observed burn passed 0, so 6- versus 7-decimal units
    are unverified. The adapter converts the caller's USDC amount to 7 decimals (the same units as `amount`), which is
    the safe direction if wrong: a too-large cap cannot increase the fee Circle charges, a too-small one only reverts.
@@ -443,3 +449,39 @@ original section, so the timeline of "verified, then found broken, then fixed" s
   triggered until a caller passed a malformed length) and is fixed as of phase 3: `nonceUsed` now
   throws a `FerrylineError` (`PARAMETER_INVALID`) client-side before ever touching the network. See
   `packages/sdk/CHANGELOG.md` and `packages/sdk/src/rails/usdc-cctp/stellar.test.ts`.
+
+- **2026-09-12, real first-party confirmation of §4 items 3 and 4.** The testnet operator account
+  (`GCF472J6BLC3C34GNBZGFXL3BY2IT3ECAASEV4NCJTUCHSCOQ5ML7RMJ`) was funded with real testnet USDC,
+  and both previously-BLOCKED experiments were re-run for real rather than left resting on the
+  secondary mainnet evidence in §3c (which that evidence's own file explicitly says is "not a
+  substitute for the burn").
+
+  **`max_fee = 0`, confirmed:** burn
+  `cb5c9637aa89cf1f93da412677f6637522ce7eb49481422702d6fdd1680c3a5f`, real, `successful: true`
+  (Horizon, ledger `4642847`), real Circle attestation `status: "complete"`, `maxFee: "0"`,
+  `feeExecuted: "0"`. Full record:
+  [verified/experiments/2026-09-12-cctp-burn-max-fee-zero.md](verified/experiments/2026-09-12-cctp-burn-max-fee-zero.md).
+
+  **`min_finality_threshold`, confirmed and refined, not just confirmed:** two real burns,
+  `min_finality_threshold = 1000`
+  (`7fa42abe7baef4334785fd7c5baf0cac01155f732366389030790d75e9b7eb2c`) and `= 2000`
+  (`c31d771418bb1f9e458e9c7f92657732f1923d7630ba7ee11d289d7120bd2f51`), both `successful: true`
+  on-chain with no visible rejection of either value. Circle's real attestation shows the `2000`
+  request executed at `2000` (matches), and the `1000` request **silently executed at
+  `finalityThresholdExecuted: 2000`**, not honored as Fast and not rejected either, with identical
+  `maxFee: "0"`/`feeExecuted: "0"` in both cases. This is now a first-party confirmation of what
+  §3c had only observed on other operators' mainnet transactions, and it directly confirms Stellar
+  cannot actually get Fast Transfer as a *source* chain: requesting `1000` is silently reinterpreted
+  as `2000` by Circle's attestation layer, with nothing on-chain signalling that the requested
+  behavior did not happen as asked. Full record:
+  [verified/experiments/2026-09-12-cctp-finality-threshold.md](verified/experiments/2026-09-12-cctp-finality-threshold.md).
+
+  **Policy decision, made explicitly, not by default:** neither confirmation changes the SDK's
+  "no default ships" policy for `maxFee`/`minFinalityThreshold`. `maxFee = "0"` being confirmed safe
+  in the one case tested does not mean it is universally correct (a caller moving a very large
+  amount, or during a period Circle's minimum fee is nonzero, needs to make that call themselves);
+  and `minFinalityThreshold`'s confirmed silent-reinterpretation behavior is itself a reason a
+  caller should keep stating their intent explicitly (so the SDK's own request shape stays an
+  honest record of what was asked for, even though Circle does not honor `1000` as requested on
+  this chain direction), not a reason to remove the parameter or default it to `2000` on the
+  caller's behalf. Both parameters remain required, unchanged from phase 2b's original design.

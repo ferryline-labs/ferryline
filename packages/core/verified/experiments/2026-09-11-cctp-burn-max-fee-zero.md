@@ -38,3 +38,12 @@ attested by Circle). That later run answers this exact question for real; this f
 verdict stays correct as a historical record of what this specific, narrower experiment (a
 standalone read-only/live-burn script, distinct from the widget's own real signing flow) found on
 2026-09-11 before a funded operator account existed.
+
+**2026-09-12, second cross-reference: this exact experiment, re-run for real.** Once the operator
+account above was actually funded with testnet USDC, this same script
+(`experiments/cctp-burn-max-fee-zero.ts`) was re-run directly, producing
+[verified/experiments/2026-09-12-cctp-burn-max-fee-zero.md](2026-09-12-cctp-burn-max-fee-zero.md),
+outcome **RAN**: burn `cb5c9637aa89cf1f93da412677f6637522ce7eb49481422702d6fdd1680c3a5f`, real,
+confirmed via Horizon and a real Circle attestation (`feeExecuted: "0"`). This file's own BLOCKED
+verdict is unchanged, it is correct for what happened on 2026-09-11; the question it asked has now
+been directly and completely answered.

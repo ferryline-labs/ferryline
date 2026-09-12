@@ -32,3 +32,16 @@ two real Stellar-source CCTP burns with `min_finality_threshold: 2000` (Standard
 on-chain and attested by Circle. That confirms 2000 for real, but says nothing about 1000 (Fast) —
 this experiment's original comparison between the two thresholds remains genuinely untested; this
 file's BLOCKED verdict stays correct and the SDK still ships no default for this parameter.
+
+**2026-09-12, second cross-reference: this exact experiment, re-run for real, comparison now
+answered.** Once the operator account above was actually funded with testnet USDC, this same
+script (`experiments/cctp-finality-threshold.ts`) was re-run directly, producing
+[verified/experiments/2026-09-12-cctp-finality-threshold.md](2026-09-12-cctp-finality-threshold.md),
+outcome **RAN**: two real burns, one at `min_finality_threshold = 1000`
+(`7fa42abe7baef4334785fd7c5baf0cac01155f732366389030790d75e9b7eb2c`) and one at `= 2000`
+(`c31d771418bb1f9e458e9c7f92657732f1923d7630ba7ee11d289d7120bd2f51`), both accepted on-chain. The
+real finding: `2000` executes as requested, but `1000` is silently executed at `2000` by Circle's
+attestation layer, not rejected and not honored as Fast. See
+[packages/core/VERIFIED.md](../../VERIFIED.md)'s §5 revision-history entry for the full account.
+This file's own BLOCKED verdict is unchanged, it is correct for what happened on 2026-09-11; the
+comparison it asked for has now been directly and completely answered.
