@@ -1,6 +1,7 @@
 // @ts-check
 import js from "@eslint/js";
 import prettier from "eslint-config-prettier";
+import globals from "globals";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
@@ -47,6 +48,24 @@ export default tseslint.config(
   {
     files: ["eslint.config.js", "**/*.config.ts", "**/*.config.js"],
     extends: [tseslint.configs.disableTypeChecked],
+  },
+  {
+    // Plain Node scripts run directly via `node`, not part of any tsconfig project (no type
+    // information available, nor needed, for a script rather than a package's own source). Real
+    // Node globals (process, fetch, setTimeout) plus real browser globals (window, document) are
+    // both genuinely used here: these scripts drive a real Playwright browser context, and
+    // `page.evaluate()` callbacks execute inside that real browser, not in the Node process
+    // running the script itself.
+    files: ["**/*.mjs"],
+    extends: [tseslint.configs.disableTypeChecked],
+    languageOptions: {
+      globals: { ...globals.node, ...globals.browser },
+    },
+    rules: {
+      // Same reasoning as experiments/**: these are real operator/developer-run scripts that talk
+      // to a terminal on purpose, not application code that should stay quiet in production.
+      "no-console": "off",
+    },
   },
   prettier,
 );

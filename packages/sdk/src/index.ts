@@ -133,6 +133,7 @@ export * from "./rails/usdc-cctp/index.js";
 // Shared infrastructure other Ferryline services (the relayer) reuse rather than reimplement.
 export { backoffDelay, sleep, type BackoffOptions, type SleepFn } from "./util/backoff.js";
 export { SDK_VERSION, FERRYLINE_SDK_USER_AGENT } from "./version.js";
+export { ERC20_ABI, EVM_ADDRESS, type EvmReader } from "./evm/reader.js";
 export {
   simulateView,
   buildInvocation,

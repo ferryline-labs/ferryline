@@ -13,10 +13,11 @@
     "exp:cctp-finality-threshold": "tsx cctp-finality-threshold.ts"
   },
   "dependencies": {
+    "@creit.tech/stellar-wallets-kit": "^2.6.0",
     "@ferryline/core": "workspace:*",
+    "@ferryline/sdk": "workspace:*",
     "@stellar/stellar-sdk": "^17.0.1",
-    "viem": "^2.56.3",
-    "@ferryline/sdk": "workspace:*"
+    "viem": "^2.56.3"
   },
   "devDependencies": {
     "tsx": "^4.20.5"
