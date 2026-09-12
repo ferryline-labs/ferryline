@@ -248,3 +248,14 @@ unattended script that could auto-generate this file the way `widget-seam-outbou
 this report was written directly from the real, independently-verified facts above — the same
 practice used for `2026-09-12-widget-seam-inbound-relayer.md` earlier the same day, for the same
 reason.
+
+## Naming-convention exception: no matching `.ts` file under `experiments/`
+
+Every other file in this directory pairs one-to-one with a same-named script under `experiments/`
+(e.g. `widget-seam-outbound-cctp.md` ↔ `experiments/widget-seam-outbound-cctp.ts`). This one does
+not, deliberately: its real driver is `packages/widget/e2e/run.mjs`, a Playwright script that
+exercises the actual `<ferryline-widget>` custom element in a real browser (not a standalone SDK
+script the way every `experiments/*.ts` file is). It lives under `packages/widget/e2e/` rather than
+`experiments/` because it needs the widget's own dev server (`e2e/vite.config.ts`) and a real
+Freighter-loaded Chrome profile, infrastructure specific to testing the widget component itself, not
+the SDK in isolation. This is intentional, not a naming-convention gap left unaddressed.

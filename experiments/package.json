@@ -10,7 +10,9 @@
     "exp:inbound-usdt0-no-trustline": "tsx inbound-usdt0-no-trustline.ts",
     "exp:inbound-usdt0-c-address": "tsx inbound-usdt0-c-address.ts",
     "exp:cctp-burn-max-fee-zero": "tsx cctp-burn-max-fee-zero.ts",
-    "exp:cctp-finality-threshold": "tsx cctp-finality-threshold.ts"
+    "exp:cctp-finality-threshold": "tsx cctp-finality-threshold.ts",
+    "exp:widget-seam-outbound-cctp": "tsx widget-seam-outbound-cctp.ts",
+    "exp:widget-seam-inbound-relayer": "tsx widget-seam-inbound-relayer.ts"
   },
   "dependencies": {
     "@creit.tech/stellar-wallets-kit": "^2.6.0",
