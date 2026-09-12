@@ -6,11 +6,31 @@ packages:
 # cpu-features/ssh2/protobufjs are transitive to testcontainers (its optional SSH tunnel to a remote
 # Docker host); the relayer's integration tests only ever talk to a local Docker daemon, so their
 # native builds are declined rather than run unreviewed.
+#
+# bufferutil/utf-8-validate/@reown/appkit arrived transitively via @creit.tech/stellar-wallets-kit
+# (added to experiments/, widget phase STEP 1 seam-proof script — only its ./types subpath is used,
+# for the real ModuleInterface type, but the package's own top-level dependency graph pulls in its
+# WalletConnect/Solana-wallet modules regardless of which subpath an importer actually uses).
+# Reviewed 2026-09-12: bufferutil/utf-8-validate are the standard, widely-used native `ws`
+# performance accelerators (compiled via node-gyp-build, no other install-time behavior) — allowed.
+# @reown/appkit has no install/postinstall script of its own in its real package.json (confirmed by
+# reading it directly) — it was flagged only because pnpm's build-approval gate applies at the
+# package level to anything newly, transitively introduced, not because it has a real native build
+# step; allowed for the same reason esbuild is (a real, reviewed "yes", not a default).
 allowBuilds:
+  "@reown/appkit": true
+  bufferutil: true
   cpu-features: false
   esbuild: true
   protobufjs: false
+  # Transitive to @creit.tech/stellar-wallets-kit via @hot-wallet/sdk's NEAR-protocol support
+  # (unrelated to anything this repo actually uses the kit for). Reviewed 2026-09-12, widget phase:
+  # its own package.json install script is `node-gyp-build || exit 0` — the same standard,
+  # well-known native-crypto-binding compile pattern as bufferutil/utf-8-validate above, with a
+  # graceful no-op fallback if the build fails. Allowed for the same reason those are.
+  secp256k1: true
   ssh2: false
+  utf-8-validate: true
 
 # Written by pnpm's supply-chain policy: packages newer than minimumReleaseAge need an explicit exclusion.
 minimumReleaseAgeExclude:
