@@ -89,7 +89,7 @@ determines which contract address gets invoked.
 
 `send_cross_chain` forwards the caller's `amount` to the rail contract; the router does not deduct or
 add its own protocol fee. (The relayer's separate sponsor-funded fee-bump mechanism, documented in
-`packages/relayer/README.md`, is unrelated — it pays *inbound* CCTP mint gas costs on Stellar, not an
+`packages/relayer/README.md`, is unrelated — it pays _inbound_ CCTP mint gas costs on Stellar, not an
 outbound router fee.) If the router should ever take a fee, that is exactly the kind of
 "fee-adjustment step" `THREAT_MODEL.md`'s Elev.1 scenario 1 warns about, and would need the
 authorization-binding question resolved explicitly as part of that feature's own design, not folded

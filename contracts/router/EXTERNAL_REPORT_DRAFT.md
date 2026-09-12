@@ -148,8 +148,8 @@ touching code:**
 - **The actual, confirmed root cause and fix direction**, found via Stellar's own historical GitHub
   issue and reference implementation, not derived from source alone: `stellar/rs-soroban-env#795`
   (closed) is the issue that produced today's exact behavior — a maintainer's resolution states
-  *"we allow duplicate `require_auth` calls each of which has to belong to a **separate authorized
-  call tree**"* (a separate stack frame, not merely separate arguments). Stellar's own official
+  _"we allow duplicate `require_auth` calls each of which has to belong to a **separate authorized
+  call tree**"_ (a separate stack frame, not merely separate arguments). Stellar's own official
   `atomic_multiswap` example demonstrates the correct pattern for exactly this "loop over N items,
   same-shaped authorization per item" case: its looping function makes **no `require_auth` call of
   its own at all** — it calls a genuinely separate, already-deployed contract once per item (a REAL

@@ -26,9 +26,9 @@ below fixes it.
 ## 2. STEP 4 — the fix, and the mutation-testing proof it actually closes the gap
 
 **Root cause, precisely (per the sign-off's request to know how, not just that):** the STEP 2 doc
-comment on `RAIL_FN_CCTP`/`RAIL_FN_OFT` claimed the function *names* were "verbatim from" the
+comment on `RAIL_FN_CCTP`/`RAIL_FN_OFT` claimed the function _names_ were "verbatim from" the
 verified interface dumps — and that claim was true. But the check stopped at the name. The
-*argument lists* were built from the four values semantically obvious from `send_cross_chain`'s own
+_argument lists_ were built from the four values semantically obvious from `send_cross_chain`'s own
 parameter list (`payer, amount, destination_domain/dst_eid, recipient/to`) — a plausible-looking
 subset that happens to be a strict subset of CCTP's real 9 arguments and a differently-shaped
 subset of the OFT's 4. This is a **partial-verification bug**: not a wrong source, not a stale
@@ -67,7 +67,7 @@ honestly, including one real self-correction:
   not a primitive — re-running the identical mutation now correctly fails it.
 - A third, independent mutation-testing pass on the six ORIGINAL invariants (not just the new
   interface checks) found a second real gap: `dos_1_atomic_invoke_is_the_only_call_site_and_never_
-  uses_try_invoke`'s `try_invoke_contract` guard matched only the literal substring
+uses_try_invoke`'s `try_invoke_contract` guard matched only the literal substring
   `"env.try_invoke_contract("` — a real call written WITH explicit turbofish generic arguments
   (`::<(), soroban_sdk::Error>`, the more common way to write this call when type inference can't
   resolve it, which is genuinely how it had to be written during this exact mutation test) has
@@ -103,12 +103,12 @@ it before deployment).
 
 ### 4.1 Redeployment
 
-| Item | Value |
-|---|---|
-| Router contract (testnet, post-fix) | `CACNV466XMCEQSE73FJN646KWYD54C3ZRDXZUZJM3EH7736YHWTKZSMP` |
-| WASM hash | `93b786f97e61c001e1ebaab9a81141214f3030ca73a148f71083d426f16633fd` |
-| Upload tx | `f58f1fa1ce2859d044e978fc46a0ab2b6b2576a5048673099d6ecdb644056ce3` |
-| Deploy (constructor) tx | `fa12fe884a13af7f1759397b823f446dfdd5704f76ac6686ffe8cd26d9c84c36` |
+| Item                                | Value                                                              |
+| ----------------------------------- | ------------------------------------------------------------------ |
+| Router contract (testnet, post-fix) | `CACNV466XMCEQSE73FJN646KWYD54C3ZRDXZUZJM3EH7736YHWTKZSMP`         |
+| WASM hash                           | `93b786f97e61c001e1ebaab9a81141214f3030ca73a148f71083d426f16633fd` |
+| Upload tx                           | `f58f1fa1ce2859d044e978fc46a0ab2b6b2576a5048673099d6ecdb644056ce3` |
+| Deploy (constructor) tx             | `fa12fe884a13af7f1759397b823f446dfdd5704f76ac6686ffe8cd26d9c84c36` |
 
 Rail-slot wiring reverified directly from ledger storage after redeployment: `UsdcContract` →
 `CDNG7HXAPBWICI2E3AUBP3YZWZELJLYSB6F5CC7WLDTLTHVM74SLRTHP`, `UsdcSac` →
@@ -161,6 +161,7 @@ tree ("it is possible for a contract to call `require_auth` for an `Address` and
 `token.xfer` authorized for the same `Address`" through sub-contract calls).
 
 **Real, controlled tests to isolate this precisely**, all confirmed:
+
 - Decoded the actual signed envelope: the authorization tree DOES contain the correct nested
   structure (`send_cross_chain` → sub-invocation `approve` → sibling `deposit_for_burn`), correctly
   addressed, with `credentials: source_account` — the tree shape itself is not the problem.
@@ -212,22 +213,22 @@ submit one against.
 All figures are real `fee_charged` values from Horizon/RPC for actual submitted transactions, in
 stroops (1 XLM = 10,000,000 stroops).
 
-| Call | Tx hash | Fee charged | Notes |
-|---|---|---|---|
-| WASM upload (STEP 3 build) | `42a69c80...06eaa9957849a` | 4,579,437 (~0.458 XLM) | Superseded build |
-| Deploy, STEP 3 build | `2d37c488...2a06eaa9957849a` | 35,186 (~0.0035 XLM) | Superseded build |
-| `version()`, STEP 3 build | `c86e80a1...143576b8b1375450` | 3,075 (~0.0003 XLM) | Cheapest real successful call, any build |
-| WASM upload, STEP 4-only build | `37c4ee32...4c529e7ba1510f3a` | — (not separately queried) | Superseded (§3's `HookDataEmpty` finding) |
-| WASM upload, STEP 4+5 build | `f58f1fa1...9d6ecdb644056ce3` | — (not separately queried) | Current deployment |
-| Deploy, STEP 4+5 build | `fa12fe88...ffe8cd26d9c84c36` | — (not separately queried) | Current deployment |
-| `send_cross_chain` (CCTP), real submission, FAILED at apply-time | `472de592...4d3ccafbd7025` | 27,033 (~0.0027 XLM) | See §4.3 — real fee charged even on a `Trapped` result |
-| `send_cross_chain` (CCTP), real submission, FAILED at apply-time (retry) | `728576f1...cd26d9c84c36`† | 27,033 (~0.0027 XLM) | Identical fee to the first attempt |
-| Real single-hop `approve` (isolation test) | `1dcad976...0041858ce091` | — (not separately queried) | Succeeded — confirms `demo-payer` signing is fine in isolation |
+| Call                                                                     | Tx hash                       | Fee charged                | Notes                                                          |
+| ------------------------------------------------------------------------ | ----------------------------- | -------------------------- | -------------------------------------------------------------- |
+| WASM upload (STEP 3 build)                                               | `42a69c80...06eaa9957849a`    | 4,579,437 (~0.458 XLM)     | Superseded build                                               |
+| Deploy, STEP 3 build                                                     | `2d37c488...2a06eaa9957849a`  | 35,186 (~0.0035 XLM)       | Superseded build                                               |
+| `version()`, STEP 3 build                                                | `c86e80a1...143576b8b1375450` | 3,075 (~0.0003 XLM)        | Cheapest real successful call, any build                       |
+| WASM upload, STEP 4-only build                                           | `37c4ee32...4c529e7ba1510f3a` | — (not separately queried) | Superseded (§3's `HookDataEmpty` finding)                      |
+| WASM upload, STEP 4+5 build                                              | `f58f1fa1...9d6ecdb644056ce3` | — (not separately queried) | Current deployment                                             |
+| Deploy, STEP 4+5 build                                                   | `fa12fe88...ffe8cd26d9c84c36` | — (not separately queried) | Current deployment                                             |
+| `send_cross_chain` (CCTP), real submission, FAILED at apply-time         | `472de592...4d3ccafbd7025`    | 27,033 (~0.0027 XLM)       | See §4.3 — real fee charged even on a `Trapped` result         |
+| `send_cross_chain` (CCTP), real submission, FAILED at apply-time (retry) | `728576f1...cd26d9c84c36`†    | 27,033 (~0.0027 XLM)       | Identical fee to the first attempt                             |
+| Real single-hop `approve` (isolation test)                               | `1dcad976...0041858ce091`     | — (not separately queried) | Succeeded — confirms `demo-payer` signing is fine in isolation |
 
 † tx hash truncated for table width; full hash
 `728576f1b5ff4d20c0c4e8b16693bef2469ef8b2212759d2fd036a44796aad94`.
 
-**What this phase could not measure:** the real per-leg cost of a *successfully completed*
+**What this phase could not measure:** the real per-leg cost of a _successfully completed_
 `send_cross_chain` or `send_cross_chain_batch` call, since no such call has yet completed on
 testnet (§4.3's open finding). The `27,033`-stroop figure for the CCTP leg's real, failed-at-
 apply-time submission is a genuine data point — it reflects the real resource cost of simulating,
@@ -280,12 +281,12 @@ succeeds (WASM hash `2c8180e27d299e461018043bd2c9c225c7b887c3a989b1e3909fb25e1bd
 **Real testnet confirmation — the first genuinely completed `send_cross_chain` in this project's
 history:**
 
-| Item | Value |
-|---|---|
-| Router (STEP 6 fix, testnet) | `CDOPZ3QMSKYFKYAMWNLG6KPQECRGOJSYE3QCAO53JJSCRCFYCMFO7P2N` |
-| WASM hash | `2c8180e27d299e461018043bd2c9c225c7b887c3a989b1e3909fb25e1bd62374` |
-| Upload tx | `50d63cd4c177a2aa7461766da5c9f9c0ebb81bacfeac401249540a0cd149c75e` |
-| Deploy tx | `57295a178d26ae336934c888fefc08c3a2bc209ac2ae4d1a37a37b667808dc00` |
+| Item                                                              | Value                                                                  |
+| ----------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Router (STEP 6 fix, testnet)                                      | `CDOPZ3QMSKYFKYAMWNLG6KPQECRGOJSYE3QCAO53JJSCRCFYCMFO7P2N`             |
+| WASM hash                                                         | `2c8180e27d299e461018043bd2c9c225c7b887c3a989b1e3909fb25e1bd62374`     |
+| Upload tx                                                         | `50d63cd4c177a2aa7461766da5c9f9c0ebb81bacfeac401249540a0cd149c75e`     |
+| Deploy tx                                                         | `57295a178d26ae336934c888fefc08c3a2bc209ac2ae4d1a37a37b667808dc00`     |
 | **`send_cross_chain` (CCTP), real, complete, `successful: true`** | **`5f91eb68a75f0a1bbcaded62d4dc2af37ccea795c984fae8c66eb9fdaace33b0`** |
 
 Confirmed via direct Horizon query (`successful: true`, real fee charged `59,681` stroops, ledger
@@ -400,12 +401,12 @@ hash `d41ddd5c121fdac6d0bd2f4ac8a3566a6f7515900ce097f3177d49af7d783e8c`).
 
 **Real testnet confirmation:**
 
-| Item | Value |
-|---|---|
-| Router (STEP 8 fix, testnet) | `CASNMFI2CCFNNUF67SPQYACZIIDXLTOQDMTXAR4DSWNEKWZ347SY2LLS` |
-| WASM hash | `d41ddd5c121fdac6d0bd2f4ac8a3566a6f7515900ce097f3177d49af7d783e8c` |
-| Upload tx | `e2fdc722762b3ab2c860e434e51351615750e37471b8ec09a5f2ac070edea4f1` |
-| Deploy tx | `55debc454b101c30f114d7bb04132049022d320e819f2acf74d31df5af1c8b68` |
+| Item                                                     | Value                                                                  |
+| -------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Router (STEP 8 fix, testnet)                             | `CASNMFI2CCFNNUF67SPQYACZIIDXLTOQDMTXAR4DSWNEKWZ347SY2LLS`             |
+| WASM hash                                                | `d41ddd5c121fdac6d0bd2f4ac8a3566a6f7515900ce097f3177d49af7d783e8c`     |
+| Upload tx                                                | `e2fdc722762b3ab2c860e434e51351615750e37471b8ec09a5f2ac070edea4f1`     |
+| Deploy tx                                                | `55debc454b101c30f114d7bb04132049022d320e819f2acf74d31df5af1c8b68`     |
 | **`send_cross_chain_batch` — real, both legs completed** | **`1ad2aeb076450b7d9d08732e5b80d58c3c70c3a0ca6cc0e79e2e375c7212381d`** |
 
 Confirmed via direct Horizon query (`"successful": true`, real fee `58,966` stroops, ledger
