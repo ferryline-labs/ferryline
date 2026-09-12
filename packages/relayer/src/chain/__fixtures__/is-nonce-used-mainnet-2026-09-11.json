@@ -1,0 +1,27 @@
+{
+  "recordedAt": "2026-09-11T18:42:34.390Z",
+  "rpcUrl": "https://mainnet.sorobanrpc.com",
+  "network": "mainnet",
+  "messageTransmitterContractId": "CACMENFFJPJMSDAJQLX4R7K3SFZIW2LJSE3R2UMLGSWHFHS353FVXAZV",
+  "simulationSourceAccount": "GATISXX6BZ6NC7IKQBY37CJD4SOZL3CYZJWXEDG6JVIY4WBS6KXJHN6Q",
+  "fixtures": [
+    {
+      "nonceHex": "ca5198d4a648c9d8f60176a689c9bf5218dec36623fcab7871b6a619dfa8ee9b",
+      "expected": true,
+      "retvalXdr": "AAAAAAAAAAE=",
+      "transactionDataXdr": "AAAAAAAAAAMAAAAGAAAAAQTCNKVL0skMCYLvyP1bkXKLaWmRNx1RizSscp5b7stbAAAAEAAAAAEAAAACAAAADwAAAAlVc2VkTm9uY2UAAAAAAAANAAAAIMpRmNSmSMnY9gF2ponJv1IY3sNmI/yreHG2phnfqO6bAAAAAQAAAAYAAAABBMI0pUvSyQwJgu/I/VuRcotpaZE3HVGLNKxynlvuy1sAAAAUAAAAAQAAAAeZvQ3cUG7hP8T0M/BicJIDTcOPR3PsFpMKGCOhF0Qx1AAAAAAALvV8AAAAAAAAAAAAAAAAAAA7cQ==",
+      "minResourceFee": "15217",
+      "authXdr": [],
+      "latestLedger": 64382191
+    },
+    {
+      "nonceHex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "expected": false,
+      "retvalXdr": "AAAAAAAAAAA=",
+      "transactionDataXdr": "AAAAAAAAAAMAAAAGAAAAAQTCNKVL0skMCYLvyP1bkXKLaWmRNx1RizSscp5b7stbAAAAEAAAAAEAAAACAAAADwAAAAlVc2VkTm9uY2UAAAAAAAANAAAAIP//////////////////////////////////////////AAAAAQAAAAYAAAABBMI0pUvSyQwJgu/I/VuRcotpaZE3HVGLNKxynlvuy1sAAAAUAAAAAQAAAAeZvQ3cUG7hP8T0M/BicJIDTcOPR3PsFpMKGCOhF0Qx1AAAAAAALnSQAAAAAAAAAAAAAAAAAAA7Wg==",
+      "minResourceFee": "15194",
+      "authXdr": [],
+      "latestLedger": 64382191
+    }
+  ]
+}

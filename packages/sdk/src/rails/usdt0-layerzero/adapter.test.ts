@@ -173,7 +173,7 @@ describe("outbound quote (Stellar -> Polygon) against recorded mainnet responses
 });
 
 describe("outbound build", () => {
-  it("produces an unsigned send with the recorded fee, the left-padded EVM recipient, and the transfer id as MEMO_TEXT", async () => {
+  it("produces an unsigned send with the recorded fee, the left-padded EVM recipient, and NO memo", async () => {
     const { adapter, store } = harness();
     const built = await adapter.build(await adapter.quote(outbound));
     expect(isTransferId(built.transferId)).toBe(true);
@@ -185,8 +185,11 @@ describe("outbound build", () => {
     if (!("memo" in tx)) {
       throw new Error("expected a plain transaction");
     }
-    expect(tx.memo.type).toBe(MemoText);
-    expect(Buffer.from(tx.memo.value as Buffer).toString("utf8")).toBe(built.transferId);
+    // REGRESSION GUARD (widget-phase STEP 1 seam-proofing found this as a real bug, confirmed
+    // against a real testnet RPC rejection: "Transaction contains a memo. Soroban transactions do
+    // not support memos."): `send` is a Soroban InvokeHostFunctionOp and can NEVER carry a memo —
+    // this used to assert MemoText here, which was the bug, not a spec. Must stay MemoNone.
+    expect(tx.memo.type).toBe("none");
     expect(tx.source).toBe(SENDER);
 
     const op = tx.operations[0];

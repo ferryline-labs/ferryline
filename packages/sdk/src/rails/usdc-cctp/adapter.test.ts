@@ -10,7 +10,7 @@ import {
   type TransferRequest,
   type TransferStatus,
 } from "@ferryline/core";
-import { Address, MemoText, TransactionBuilder, scValToNative } from "@stellar/stellar-sdk";
+import { Address, TransactionBuilder, scValToNative } from "@stellar/stellar-sdk";
 import { Buffer } from "buffer";
 import { decodeFunctionData } from "viem";
 import { describe, expect, it } from "vitest";
@@ -28,7 +28,12 @@ import {
 } from "./fakes.test-support.js";
 import type { IrisFeeRow, IrisMessage } from "./iris.js";
 import { parseForwarderHookData } from "./message.js";
-import { DEPOSIT_FOR_BURN_ARGS, depositForBurnScVals } from "./stellar.js";
+import {
+  DEPOSIT_FOR_BURN_ARGS,
+  MINT_AND_FORWARD_ARGS,
+  depositForBurnScVals,
+  mintAndForwardScVals,
+} from "./stellar.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixture = JSON.parse(
@@ -392,7 +397,7 @@ describe("outbound build: approve first, then deposit_for_burn", () => {
     expect(rpc.calls.filter((c) => c.startsWith("deposit_for_burn"))).toHaveLength(0);
   });
 
-  it("once the allowance exists, prepares a burn that is byte-identical to the real mainnet invocation and carries the transfer id as MEMO_TEXT", async () => {
+  it("once the allowance exists, prepares a burn that is byte-identical to the real mainnet invocation and carries NO memo", async () => {
     const { adapter, rpc } = harness();
     const built = await adapter.build(await adapter.quote(outbound));
     rpc.setAllowance(REAL_AMOUNT7);
@@ -405,8 +410,11 @@ describe("outbound build: approve first, then deposit_for_burn", () => {
     expect(decoded.fn).toBe("deposit_for_burn");
     expect(decoded.argsXdr).toEqual(fixture.burnTransaction.args);
     expect(decoded.tx.source).toBe(SENDER);
-    expect(decoded.tx.memo.type).toBe(MemoText);
-    expect(Buffer.from(decoded.tx.memo.value as Buffer).toString("utf8")).toBe(built.transferId);
+    // REGRESSION GUARD (widget-phase STEP 1 seam-proofing found this as a real bug, confirmed
+    // against a real testnet RPC rejection: "Transaction contains a memo. Soroban transactions do
+    // not support memos."): deposit_for_burn is a Soroban InvokeHostFunctionOp and can NEVER carry
+    // a memo — this used to assert MemoText here, which was the bug, not a spec. Must stay MemoNone.
+    expect(decoded.tx.memo.type).toBe("none");
   });
 
   it("with a sufficient standing allowance, builds the burn directly as a single signable step", async () => {
@@ -458,8 +466,7 @@ describe("encoder conformance with the recorded mainnet interfaces", () => {
 
   it("the forwarder and transmitter entry points the relayer will call have the expected parameters", () => {
     expect(params("cctp-forwarder.mainnet.rs", "mint_and_forward")).toEqual([
-      "message",
-      "attestation",
+      ...MINT_AND_FORWARD_ARGS,
     ]);
     expect(params("cctp-message-transmitter.mainnet.rs", "is_nonce_used")).toEqual(["nonce"]);
   });
@@ -478,6 +485,21 @@ describe("encoder conformance with the recorded mainnet interfaces", () => {
       minFinalityThreshold: 2000,
     }).map((v) => v.toXDR("base64"));
     expect(encoded).toEqual(fixture.burnTransaction.args);
+  });
+
+  it("encodes mint_and_forward with a real observed Iris message and attestation, in the right order", () => {
+    const messageBytes = new Uint8Array(Buffer.from(irisComplete.message.slice(2), "hex"));
+    const attestationBytes = new Uint8Array(Buffer.from(irisComplete.attestation.slice(2), "hex"));
+    const [messageArg, attestationArg] = mintAndForwardScVals({
+      message: messageBytes,
+      attestation: attestationBytes,
+    });
+    expect(scValToNative(messageArg!) as Uint8Array).toEqual(messageBytes);
+    expect(scValToNative(attestationArg!) as Uint8Array).toEqual(attestationBytes);
+    // Positional order matters: message first, attestation second, matching the deployed signature.
+    expect(
+      mintAndForwardScVals({ message: messageBytes, attestation: attestationBytes }),
+    ).toHaveLength(2);
   });
 });
 

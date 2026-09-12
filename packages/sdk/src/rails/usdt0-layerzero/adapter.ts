@@ -52,7 +52,6 @@ import {
   buildInvocation,
   getNativeBalance,
   getTrustline,
-  memoFitsText,
   simulateView,
   type StellarRpc,
 } from "../../stellar/rpc.js";
@@ -525,9 +524,6 @@ export class Usdt0LayerZeroAdapter implements RailAdapter {
   private async buildOutbound(quote: Quote, priv: OutboundPrivate): Promise<BuiltTransfer> {
     const refundAddress = this.assertStellarRefund(quote.refundAddress);
     const transferId = this.newTransferId();
-    if (!memoFitsText(transferId)) {
-      throw new FerrylineError("TRANSFER_ID_INVALID", "transfer id does not fit MEMO_TEXT");
-    }
     let source: Account;
     if (priv.senderKind === "account") {
       source = await this.options.stellarRpc.getAccount(priv.sender);
@@ -566,11 +562,15 @@ export class Usdt0LayerZeroAdapter implements RailAdapter {
       // The approve step consumes one sequence number; the send that follows needs the next one.
       source.incrementSequenceNumber();
     }
-    // MEMO_TEXT carries the transfer id so the relayer, widget and logs can correlate the on-chain
-    // transaction with this transfer without a database round-trip. Known limitation: some
-    // custodial services require their own memo on outgoing transactions from sub-accounts they
-    // manage; a sender operating from such an account cannot use this rail through Ferryline
-    // until memo-less correlation (by GUID lookup) is implemented.
+    // NO memo: this is a Soroban InvokeHostFunctionOp, and Soroban transactions can never carry a
+    // memo (confirmed with a real testnet RPC rejection during widget-phase STEP 1 seam-proofing,
+    // against the identical bug in the CCTP rail's own outbound burn — "Transaction contains a
+    // memo. Soroban transactions do not support memos."). This USED to carry `transferId` in
+    // MEMO_TEXT for correlation, which — as the comment this replaces already anticipated for a
+    // DIFFERENT reason (custodial senders needing their own memo) — was never actually necessary:
+    // `track()` above already implements memo-less correlation, by `sourceTxHash` (populated via
+    // `Ferryline.markSubmitted`) as the primary key and the LayerZero GUID (read from `send()`'s own
+    // real return value after the fact) for scan-lookup precision. Nothing reads the memo back.
     const send = await buildInvocation({
       rpc: this.options.stellarRpc,
       source,
@@ -583,7 +583,6 @@ export class Usdt0LayerZeroAdapter implements RailAdapter {
         fee: priv.fee,
         refund_address: refundAddress,
       }),
-      memoText: transferId,
     });
     steps.push({
       chain: "stellar",

@@ -8,11 +8,24 @@
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run",
+    "test": "vitest run --exclude '**/*.integration.test.ts'",
+    "test:integration": "vitest run -c vitest.integration.config.ts",
     "start": "node dist/main.js",
-    "clean": "rm -rf dist .turbo"
+    "clean": "rm -rf dist .turbo",
+    "record:nonce-fixtures": "tsx scripts/record-nonce-check-fixtures.ts"
   },
   "dependencies": {
-    "@ferryline/core": "workspace:*"
+    "@fastify/type-provider-zod": "^1.0.0",
+    "@ferryline/core": "workspace:*",
+    "@ferryline/sdk": "workspace:*",
+    "@stellar/stellar-sdk": "^17.0.1",
+    "fastify": "^5.12.4",
+    "pg": "^8.23.0",
+    "zod": "^4.6.2"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.23.1",
+    "testcontainers": "^12.1.0",
+    "tsx": "^4.23.13"
   }
 }

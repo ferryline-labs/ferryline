@@ -422,3 +422,24 @@ substituted with an assumption.
 5. **LayerZero Scan status vocabulary** beyond `DELIVERED`.
 6. **EVM-side `send` calldata** (`IOFT_ABI` in the SDK) has not been executed against a live chain by this repo.
 7. **SCF #46 deadline** and the Discord quotes in the technical doc (not code-relevant).
+
+---
+
+## 5. Revision history: corrections found after initial verification
+
+Facts and code in this file are checked once and then relied on; when a later phase's testing finds
+that reliance was wrong, the correction is recorded here rather than silently folded into the
+original section, so the timeline of "verified, then found broken, then fixed" stays visible.
+
+- **2026-09-15 (phase 3).** `nonceUsed` (`packages/sdk/src/rails/usdc-cctp/stellar.ts`, backing
+  `MessageTransmitter.is_nonce_used`, part of §1.6/M3's interface) did not validate its `nonce`
+  argument was exactly 32 bytes before calling `simulateTransaction`. `is_nonce_used`'s parameter is
+  declared `BytesN<32>` (a fixed-size type, confirmed in the M3 interface dump referenced above) —
+  a 31-byte value reached Soroban and trapped with an opaque `HostError: Error(WasmVm,
+  InvalidAction)`, reproduced against a real mainnet simulation while building the relayer's
+  crash-recovery test (`packages/relayer/scripts/record-nonce-check-fixtures.ts`). This was a bug
+  in code shipped in phase 2b (the `usdc-cctp` adapter's delivery tracking already called
+  `nonceUsed`, correctly, with well-formed 32-byte nonces from Iris — the bug was latent and never
+  triggered until a caller passed a malformed length) and is fixed as of phase 3: `nonceUsed` now
+  throws a `FerrylineError` (`PARAMETER_INVALID`) client-side before ever touching the network. See
+  `packages/sdk/CHANGELOG.md` and `packages/sdk/src/rails/usdc-cctp/stellar.test.ts`.

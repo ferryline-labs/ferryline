@@ -1,8 +1,7 @@
 import { FerrylineError } from "@ferryline/core";
-import { BASE_FEE, Contract, Keypair, Memo, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
+import { BASE_FEE, Contract, Keypair, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
 import type { Account, Asset, Transaction } from "@stellar/stellar-sdk";
 import { Api, assembleTransaction } from "@stellar/stellar-sdk/rpc";
-import { Buffer } from "buffer";
 
 /**
  * The slice of `rpc.Server` the adapter uses. `rpc.Server` satisfies it structurally;
@@ -23,8 +22,6 @@ export interface InvokeParams {
   readonly contractId: string;
   readonly fn: string;
   readonly args: readonly xdr.ScVal[];
-  /** Attached as MEMO_TEXT. Must be at most 28 bytes. */
-  readonly memoText?: string;
   readonly timeoutSeconds?: number;
 }
 
@@ -33,14 +30,20 @@ function upstream(message: string, cause?: unknown): FerrylineError {
 }
 
 function buildUnsimulated(params: InvokeParams): Transaction {
-  const builder = new TransactionBuilder(params.source, {
+  // No memo is ever attached here. Soroban's InvokeHostFunctionOp transactions reject MEMO_TEXT
+  // outright (confirmed via a real testnet RPC rejection, widget phase STEP 1) — this used to be a
+  // `memoText` parameter that attached one, and the field was removed rather than left unused after
+  // finding it was the shared primitive all three now-fixed call sites funneled the bug through (see
+  // packages/sdk/CHANGELOG.md's "Unreleased" entry). Removing it here, not just at the call sites,
+  // makes it a compile-time impossibility for any future caller to reintroduce this bug through this
+  // function, rather than relying on nobody happening to pass the field.
+  return new TransactionBuilder(params.source, {
     fee: BASE_FEE,
     networkPassphrase: params.networkPassphrase,
-  }).addOperation(new Contract(params.contractId).call(params.fn, ...params.args));
-  if (params.memoText !== undefined) {
-    builder.addMemo(Memo.text(params.memoText));
-  }
-  return builder.setTimeout(params.timeoutSeconds ?? 300).build();
+  })
+    .addOperation(new Contract(params.contractId).call(params.fn, ...params.args))
+    .setTimeout(params.timeoutSeconds ?? 300)
+    .build();
 }
 
 /** Simulate a read-only contract call and hand back the raw return value. Never submits. */
@@ -126,8 +129,4 @@ export async function getNativeBalance(
   const response = await rpc.getLedgerEntries(accountKey(accountId));
   const entry = response.entries[0];
   return entry?.val.type === "account" ? entry.val.account.balance : undefined;
-}
-
-export function memoFitsText(text: string): boolean {
-  return Buffer.byteLength(text, "utf8") <= 28;
 }

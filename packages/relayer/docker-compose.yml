@@ -1,0 +1,65 @@
+# Ferryline relayer, self-hosted: two services (relayer + Postgres), matching the self-hostable
+# promise in the project's maintenance plan. Build context is the REPO ROOT (not this directory),
+# since the Dockerfile needs packages/core, packages/sdk, and packages/relayer together — run this
+# from packages/relayer/ as `docker compose up`, or from the repo root as
+# `docker compose -f packages/relayer/docker-compose.yml up`.
+#
+# Every FERRYLINE_* variable below with NO default (${VAR:?message} syntax) is genuinely required —
+# spend-cap-related ones especially: the relayer refuses to start rather than run with a silently
+# assumed default for anything that controls real money movement (see spend/config.ts). Copy
+# .env.example to .env and fill in the real values before running this.
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ferryline
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ferryline
+    volumes:
+      - ferryline-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ferryline -d ferryline"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    ports:
+      # Exposed on the host only for local inspection (psql, a GUI client); the relayer itself
+      # reaches this service over the compose network at postgres:5432, not through this mapping.
+      # Host-side port is configurable (default 5432) in case the host already runs its own Postgres.
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
+
+  relayer:
+    build:
+      # Repo root: this compose file lives at packages/relayer/, so ../.. reaches the actual repo
+      # root the Dockerfile's own COPY paths (packages/core, packages/sdk, packages/relayer) expect.
+      context: ../..
+      dockerfile: packages/relayer/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      # --- Genuinely required, no default: the relayer refuses to start without these ---
+      FERRYLINE_NETWORK: ${FERRYLINE_NETWORK:?set to "mainnet" or "testnet" in .env}
+      DATABASE_URL: postgresql://ferryline:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/ferryline
+      FERRYLINE_STELLAR_RPC_URL: ${FERRYLINE_STELLAR_RPC_URL:?set the Soroban RPC endpoint in .env}
+      FERRYLINE_SPONSOR_SECRET: ${FERRYLINE_SPONSOR_SECRET:?set the sponsor account's Stellar secret seed in .env — NEVER commit this}
+      # --- Spend-related, required, NO default per the phase-3/STEP-4 sign-offs ---
+      FERRYLINE_MAX_FEE_BUMP_STROOPS: ${FERRYLINE_MAX_FEE_BUMP_STROOPS:?set the per-transfer fee-bump cap, in stroops, in .env}
+      FERRYLINE_DAILY_SPEND_CEILING_STROOPS: ${FERRYLINE_DAILY_SPEND_CEILING_STROOPS:?set the daily spend ceiling, in stroops, in .env}
+      FERRYLINE_MAX_TRANSFERS_PER_RECIPIENT: ${FERRYLINE_MAX_TRANSFERS_PER_RECIPIENT:?set the real per-recipient rate limit in .env}
+      FERRYLINE_RECIPIENT_RATE_LIMIT_WINDOW_MS: ${FERRYLINE_RECIPIENT_RATE_LIMIT_WINDOW_MS:?set the per-recipient rate-limit window, in ms, in .env}
+      # --- Allowed sensible defaults (performance/load knobs, not money-safety controls) ---
+      FERRYLINE_POLL_INTERVAL_MS: ${FERRYLINE_POLL_INTERVAL_MS:-2000}
+      FERRYLINE_POLL_MAX_INTERVAL_MS: ${FERRYLINE_POLL_MAX_INTERVAL_MS:-30000}
+      FERRYLINE_MAX_CONCURRENT_TRANSFERS: ${FERRYLINE_MAX_CONCURRENT_TRANSFERS:-20}
+      FERRYLINE_REGISTRATION_LIMIT_MAX_ATTEMPTS: ${FERRYLINE_REGISTRATION_LIMIT_MAX_ATTEMPTS:-60}
+      FERRYLINE_REGISTRATION_LIMIT_WINDOW_MS: ${FERRYLINE_REGISTRATION_LIMIT_WINDOW_MS:-60000}
+      FERRYLINE_RELAYER_VERSION: ${FERRYLINE_RELAYER_VERSION:-0.0.0}
+
+volumes:
+  ferryline-postgres-data:
