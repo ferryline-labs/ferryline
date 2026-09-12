@@ -140,7 +140,6 @@ export {
   getNativeBalance,
   trustlineKey,
   accountKey,
-  memoFitsText,
   type StellarRpc,
   type InvokeParams,
   type BuiltInvocation,

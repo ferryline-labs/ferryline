@@ -10,7 +10,7 @@ import {
   type TransferRequest,
   type TransferStatus,
 } from "@ferryline/core";
-import { Address, MemoText, TransactionBuilder, scValToNative } from "@stellar/stellar-sdk";
+import { Address, TransactionBuilder, scValToNative } from "@stellar/stellar-sdk";
 import { Buffer } from "buffer";
 import { decodeFunctionData } from "viem";
 import { describe, expect, it } from "vitest";
@@ -397,7 +397,7 @@ describe("outbound build: approve first, then deposit_for_burn", () => {
     expect(rpc.calls.filter((c) => c.startsWith("deposit_for_burn"))).toHaveLength(0);
   });
 
-  it("once the allowance exists, prepares a burn that is byte-identical to the real mainnet invocation and carries the transfer id as MEMO_TEXT", async () => {
+  it("once the allowance exists, prepares a burn that is byte-identical to the real mainnet invocation and carries NO memo", async () => {
     const { adapter, rpc } = harness();
     const built = await adapter.build(await adapter.quote(outbound));
     rpc.setAllowance(REAL_AMOUNT7);
@@ -410,8 +410,11 @@ describe("outbound build: approve first, then deposit_for_burn", () => {
     expect(decoded.fn).toBe("deposit_for_burn");
     expect(decoded.argsXdr).toEqual(fixture.burnTransaction.args);
     expect(decoded.tx.source).toBe(SENDER);
-    expect(decoded.tx.memo.type).toBe(MemoText);
-    expect(Buffer.from(decoded.tx.memo.value as Buffer).toString("utf8")).toBe(built.transferId);
+    // REGRESSION GUARD (widget-phase STEP 1 seam-proofing found this as a real bug, confirmed
+    // against a real testnet RPC rejection: "Transaction contains a memo. Soroban transactions do
+    // not support memos."): deposit_for_burn is a Soroban InvokeHostFunctionOp and can NEVER carry
+    // a memo — this used to assert MemoText here, which was the bug, not a spec. Must stay MemoNone.
+    expect(decoded.tx.memo.type).toBe("none");
   });
 
   it("with a sufficient standing allowance, builds the burn directly as a single signable step", async () => {

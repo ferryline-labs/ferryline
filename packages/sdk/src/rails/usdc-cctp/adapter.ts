@@ -34,7 +34,6 @@ import {
   buildInvocation,
   getNativeBalance,
   getTrustline,
-  memoFitsText,
   type StellarRpc,
 } from "../../stellar/rpc.js";
 import {
@@ -309,7 +308,6 @@ export class UsdcCctpAdapter implements RailAdapter {
       );
     }
     return this.buildBurnStep(
-      transferId,
       source,
       {
         caller: burn.caller,
@@ -636,9 +634,6 @@ export class UsdcCctpAdapter implements RailAdapter {
 
   private async buildOutbound(quote: Quote, priv: OutboundPrivate): Promise<BuiltTransfer> {
     const transferId = this.newTransferId();
-    if (!memoFitsText(transferId)) {
-      throw new FerrylineError("TRANSFER_ID_INVALID", "transfer id does not fit MEMO_TEXT");
-    }
     const source = await this.sourceAccountFor(
       priv.senderKind === "account" ? priv.sender : undefined,
       true,
@@ -685,7 +680,7 @@ export class UsdcCctpAdapter implements RailAdapter {
         description: `Burn ${formatAmount(quote.debit)} USDC toward ${priv.dest.chain} via CCTP (prepare after the approve confirms)`,
       });
     } else {
-      steps.push(await this.buildBurnStep(transferId, source, burnArgs, priv.dest.chain));
+      steps.push(await this.buildBurnStep(source, burnArgs, priv.dest.chain));
     }
     const railRef: CctpRailRef = {
       direction: "out",
@@ -714,12 +709,17 @@ export class UsdcCctpAdapter implements RailAdapter {
   }
 
   private async buildBurnStep(
-    transferId: TransferId,
     source: Account,
     args: Parameters<typeof depositForBurnScVals>[0],
     destinationChain: string,
   ): Promise<TransferStep> {
-    // MEMO_TEXT carries the transfer id, as on the USDT0 rail. Same custodial-memo limitation applies.
+    // NO memo: this is a Soroban InvokeHostFunctionOp, and Soroban transactions can never carry a
+    // memo (confirmed with a real testnet RPC rejection during widget-phase STEP 1 seam-proofing —
+    // "Transaction contains a memo. Soroban transactions do not support memos." — every real
+    // outbound burn failed at simulation until this was removed). Correlation with `transferId`
+    // does not need a memo: `track()` above reads `sourceTxHash` from `this.options.store`, which
+    // the caller populates via `Ferryline.markSubmitted(transferId, sourceTxHash)` after signing
+    // and submitting — the real, already-existing mechanism, not the on-chain memo.
     const burn = await buildInvocation({
       rpc: this.options.stellarRpc,
       source,
@@ -727,7 +727,6 @@ export class UsdcCctpAdapter implements RailAdapter {
       contractId: this.cfg.tokenMessengerMinter,
       fn: "deposit_for_burn",
       args: depositForBurnScVals(args),
-      memoText: transferId,
     });
     return {
       chain: "stellar",
