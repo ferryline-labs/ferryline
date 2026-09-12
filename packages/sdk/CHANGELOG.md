@@ -86,3 +86,15 @@ All notable changes to `@ferryline/sdk` are documented in this file. Format loos
   with no real caller, not behavior anything actually exercised. 83 SDK tests still pass unchanged
   (none referenced either symbol); relayer typechecks clean.
 
+- **2026-09-15 — `nonceUsed` (usdc-cctp/stellar.ts) did not validate the nonce was exactly 32
+  bytes before calling `MessageTransmitter.is_nonce_used`.** The contract's parameter is
+  `BytesN<32>`, a fixed-size type; a caller passing the wrong length reached Soroban and the call
+  trapped with an opaque `HostError: Error(WasmVm, InvalidAction)`, confirmed against a real
+  mainnet simulation. `nonceUsed` now rejects a wrong-length nonce client-side with a clear
+  `FerrylineError` (code `PARAMETER_INVALID`) before ever calling `simulateTransaction`.
+  This function is used by the `usdc-cctp` adapter's delivery-tracking (`track()`, added in phase
+  2b) and by the relayer's reconciliation and delivery-polling logic (phase 3) — the bug predates
+  phase 3 but was only caught while building the relayer's crash-recovery test, which is the first
+  caller to have exercised it against a malformed-length value. See
+  [`packages/core/VERIFIED.md`](../core/VERIFIED.md) for the upstream evidence and
+  `packages/sdk/src/rails/usdc-cctp/stellar.test.ts` for the regression test.
