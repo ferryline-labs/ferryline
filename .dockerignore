@@ -1,0 +1,32 @@
+# Applies to every Docker build in this repo whose context is the repo root (e.g.
+# packages/relayer/Dockerfile, built via `docker build -f packages/relayer/Dockerfile .` or via
+# packages/relayer/docker-compose.yml's `context: ../..`). Two things about .dockerignore that are
+# NOT true of .gitignore, both confirmed by directly testing (not assumed) — see the STEP 6 report:
+#
+#   1. Docker only honors a .dockerignore at the BUILD CONTEXT'S ROOT. A .dockerignore nested inside
+#      packages/relayer/ does NOT apply when the build context is the repo root, even though that is
+#      where the Dockerfile itself lives.
+#   2. A bare pattern like `.env` does NOT match recursively the way .gitignore's does — it only
+#      matches a file named exactly `.env` AT THE CONTEXT ROOT. Every pattern below that needs to
+#      match at any depth (packages/relayer/.env, packages/anything-else/.env, etc.) is written with
+#      an explicit `**/` prefix for exactly this reason.
+
+**/node_modules
+**/dist
+**/.turbo
+**/coverage
+**/*.tsbuildinfo
+
+# Secrets: .env files are created right next to docker-compose.yml per README.md's instructions, and
+# must never end up baked into an image layer. .env.example is the one exception (no real secrets).
+**/.env
+**/.env.*
+!**/.env.example
+
+**/.DS_Store
+.git
+
+# Rust / Soroban contract build artifacts — irrelevant to any Node.js package's Docker build and
+# unnecessarily large to include in the build context.
+contracts/router/target
+contracts/router/test_snapshots

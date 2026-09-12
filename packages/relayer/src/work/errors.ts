@@ -38,7 +38,18 @@ export type TerminalErrorCode =
   | "RECIPIENT_UNRESOLVABLE"
   /** The single-transfer spend cap (FERRYLINE_MAX_FEE_BUMP_STROOPS) would be exceeded by the real
    *  fee-bump quote for this transfer. Not a config problem — a per-transfer decision. */
-  | "TRANSFER_EXCEEDS_SPEND_CAP";
+  | "TRANSFER_EXCEEDS_SPEND_CAP"
+  /** This recipient has registered maxTransfersPerRecipient-or-more transfers within
+   *  recipientRateLimitWindowMs (see countByRecipientSince, checked at the pending -> attested
+   *  transition once the recipient is known from the verified on-chain message). This is a policy
+   *  rejection, not a transient condition: per the STEP 4 sign-off, it is deliberately terminal
+   *  rather than retryable, so a rate-limited transfer does not silently keep retrying against a
+   *  limit that has not changed, and so it counts toward the recipient's future windows (excluding
+   *  it would let an attacker spam past its own block for free — see spend/registration-limit.ts's
+   *  own doc comment for the same reasoning applied at registration time). No spend-log entry is
+   *  written for this case: nothing here was ever a spend candidate — see work/submit.ts's
+   *  spend-log-before-reservation ordering for what IS logged and why this case is different. */
+  | "RECIPIENT_RATE_LIMITED";
 
 const TERMINAL_CODES: ReadonlySet<string> = new Set<TerminalErrorCode>([
   "NONCE_ALREADY_USED",
@@ -48,6 +59,7 @@ const TERMINAL_CODES: ReadonlySet<string> = new Set<TerminalErrorCode>([
   "IRIS_STATUS_UNRECOGNIZED_TERMINAL",
   "RECIPIENT_UNRESOLVABLE",
   "TRANSFER_EXCEEDS_SPEND_CAP",
+  "RECIPIENT_RATE_LIMITED",
 ]);
 
 export function isTerminalErrorCode(code: string): code is TerminalErrorCode {

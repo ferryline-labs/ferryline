@@ -44,8 +44,6 @@ function baseInput(overrides: Partial<RegisterTransferInput> = {}): RegisterTran
     sourceChain: "base",
     sourceTxHash: `0x${crypto.randomUUID().replace(/-/g, "")}`,
     sourceDomain: 6,
-    amount: "1000000",
-    recipient: "GATISXX6BZ6NC7IKQBY37CJD4SOZL3CYZJWXEDG6JVIY4WBS6KXJHN6Q",
     ...overrides,
   };
 }
@@ -73,6 +71,8 @@ describe("crash recovery: a transfer stuck in `submitting`", () => {
     // observed sendTransaction's response (the crash point named in the sign-off).
     const registered = await repo.register(baseInput());
     const attested = await repo.transition(registered.id, registered.version, "attested", {
+      amount: "1000000",
+      recipient: "GATISXX6BZ6NC7IKQBY37CJD4SOZL3CYZJWXEDG6JVIY4WBS6KXJHN6Q",
       irisNonce: DELIVERED_NONCE,
       irisMessage: "0xdeadbeef",
       irisAttestation: "0xcafe",
@@ -112,6 +112,8 @@ describe("crash recovery: a transfer stuck in `submitting`", () => {
 
     const registered = await repo.register(baseInput());
     const attested = await repo.transition(registered.id, registered.version, "attested", {
+      amount: "1000000",
+      recipient: "GATISXX6BZ6NC7IKQBY37CJD4SOZL3CYZJWXEDG6JVIY4WBS6KXJHN6Q",
       irisNonce: UNUSED_NONCE,
       irisMessage: "0xdeadbeef",
       irisAttestation: "0xcafe",
@@ -153,6 +155,8 @@ describe("crash recovery: a transfer stuck in `submitting`", () => {
     async function stick(nonce: string): Promise<string> {
       const registered = await repo.register(baseInput());
       const attested = await repo.transition(registered.id, registered.version, "attested", {
+        amount: "1000000",
+        recipient: "GATISXX6BZ6NC7IKQBY37CJD4SOZL3CYZJWXEDG6JVIY4WBS6KXJHN6Q",
         irisNonce: nonce,
         irisMessage: "0xdeadbeef",
         irisAttestation: "0xcafe",

@@ -1,4 +1,4 @@
-import type { Pool, PoolClient } from "pg";
+import type { Pool } from "pg";
 
 import type { TerminalErrorCode } from "../work/errors.js";
 import {
@@ -22,8 +22,8 @@ interface Row {
   source_domain: number;
   destination_chain: string;
   destination_tx_hash: string | null;
-  amount: string;
-  recipient: string;
+  amount: string | null;
+  recipient: string | null;
   mint_recipient: string | null;
   destination_caller: string | null;
   iris_nonce: string | null;
@@ -72,19 +72,13 @@ export class PostgresTransferRepository implements TransferRepository {
 
   async register(input: RegisterTransferInput): Promise<TransferRow> {
     try {
+      // amount and recipient are deliberately absent here: they are NULL until the real Iris
+      // message is parsed at the attested transition (see work/attest.ts and db/schema.sql).
       const result = await this.pool.query<Row>(
-        `INSERT INTO transfers (id, rail, status, source_chain, source_tx_hash, source_domain, amount, recipient)
-         VALUES ($1, $2, 'pending', $3, $4, $5, $6, $7)
+        `INSERT INTO transfers (id, rail, status, source_chain, source_tx_hash, source_domain)
+         VALUES ($1, $2, 'pending', $3, $4, $5)
          RETURNING *`,
-        [
-          input.id,
-          input.rail,
-          input.sourceChain,
-          input.sourceTxHash,
-          input.sourceDomain,
-          input.amount,
-          input.recipient,
-        ],
+        [input.id, input.rail, input.sourceChain, input.sourceTxHash, input.sourceDomain],
       );
       return toRow(result.rows[0]!);
     } catch (error) {
@@ -127,6 +121,8 @@ export class PostgresTransferRepository implements TransferRepository {
     let i = 4;
     const columnFor: Record<keyof TransitionPatch, string> = {
       destinationTxHash: "destination_tx_hash",
+      amount: "amount",
+      recipient: "recipient",
       mintRecipient: "mint_recipient",
       destinationCaller: "destination_caller",
       irisNonce: "iris_nonce",
@@ -172,23 +168,4 @@ function isUniqueViolation(error: unknown): boolean {
     "code" in error &&
     (error as { code?: unknown }).code === UNIQUE_VIOLATION
   );
-}
-
-/** Runs an operation inside an explicit transaction; used by the spend-ceiling code path. */
-export async function withTransaction<T>(
-  pool: Pool,
-  fn: (client: PoolClient) => Promise<T>,
-): Promise<T> {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const result = await fn(client);
-    await client.query("COMMIT");
-    return result;
-  } catch (error) {
-    await client.query("ROLLBACK").catch(() => undefined);
-    throw error;
-  } finally {
-    client.release();
-  }
 }

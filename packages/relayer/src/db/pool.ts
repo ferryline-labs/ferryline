@@ -1,11 +1,38 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { Pool, type PoolConfig } from "pg";
 
+/**
+ * Finds the relayer package's root directory (the one containing package.json and db/schema.sql)
+ * by walking up from `startDir`. NOT a fixed "go up N levels" path: this file runs at two genuinely
+ * different depths relative to the package root — packages/relayer/src/db/ when run from source
+ * (two levels below the root) vs. packages/relayer/dist/ when run as the bundled production build
+ * tsup produces (one level below the root, since tsup flattens src/db/pool.ts's whole module tree
+ * into a single dist/main.js). A hardcoded "../.." was wrong for the bundled case — this was only
+ * caught by actually running `node dist/main.js` (via docker compose up) rather than trusting it
+ * built cleanly; see the STEP 6 report. Walking up until package.json is found works at either depth
+ * and stays correct if the bundler's output layout ever changes again.
+ */
+export function findPackageRoot(startDir: string): string {
+  let dir = startDir;
+  for (;;) {
+    if (existsSync(join(dir, "package.json"))) {
+      return dir;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) {
+      throw new Error(
+        `could not find the relayer package root (no package.json found walking up from ${startDir})`,
+      );
+    }
+    dir = parent;
+  }
+}
+
 const here = dirname(fileURLToPath(import.meta.url));
-const SCHEMA_PATH = join(here, "..", "..", "db", "schema.sql");
+const SCHEMA_PATH = join(findPackageRoot(here), "db", "schema.sql");
 
 export function createPool(config: PoolConfig): Pool {
   return new Pool(config);

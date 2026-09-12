@@ -20,9 +20,14 @@ export interface TransferRow {
   readonly sourceDomain: number;
   readonly destinationChain: string;
   readonly destinationTxHash: string | null;
-  /** 6-decimal USDC units, as a string (NUMERIC in Postgres; avoids float precision loss). */
-  readonly amount: string;
-  readonly recipient: string;
+  /**
+   * NULL until `attested`. 6-decimal USDC units, as a string (NUMERIC in Postgres; avoids float
+   * precision loss). Extracted from the real Iris message body once attested, never accepted from
+   * the POST /transfers caller — see db/schema.sql.
+   */
+  readonly amount: string | null;
+  /** NULL until `attested`. Extracted from the message's forwarder hook data, same reasoning as `amount`. */
+  readonly recipient: string | null;
   readonly mintRecipient: string | null;
   readonly destinationCaller: string | null;
   readonly irisNonce: string | null;
@@ -35,14 +40,13 @@ export interface TransferRow {
   readonly updatedAt: Date;
 }
 
+/** What POST /transfers actually accepts: which source transaction to watch, nothing else. */
 export interface RegisterTransferInput {
   readonly id: string;
   readonly rail: string;
   readonly sourceChain: string;
   readonly sourceTxHash: string;
   readonly sourceDomain: number;
-  readonly amount: string;
-  readonly recipient: string;
 }
 
 /** Thrown by `transition` when the row's version does not match `expectedVersion` (lost the race). */
@@ -78,6 +82,14 @@ export class DuplicateTransferError extends Error {
 
 export interface TransitionPatch {
   readonly destinationTxHash?: string;
+  /** Written at the pending -> attested transition (or pending -> failed with
+   *  RECIPIENT_RATE_LIMITED, which still records the real value it was rejected for), extracted
+   *  from the real Iris message body — never from the POST /transfers caller. */
+  readonly amount?: string;
+  /** Written at the pending -> attested transition (or pending -> failed with
+   *  RECIPIENT_RATE_LIMITED, which still records the real value it was rejected for), extracted
+   *  from the real forwarder hook data — never from the POST /transfers caller. */
+  readonly recipient?: string;
   readonly mintRecipient?: string;
   readonly destinationCaller?: string;
   readonly irisNonce?: string;

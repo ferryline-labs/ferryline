@@ -1,14 +1,19 @@
 # syntax=docker/dockerfile:1
-# Not yet exercised in CI. See the TASK 1-3 report before relying on it.
+# Verified buildable (STEP 6): `docker build -f packages/relayer/Dockerfile .` from the repo root.
 FROM node:24-alpine AS build
 RUN corepack enable
 WORKDIR /repo
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json turbo.json tsconfig.base.json ./
 COPY packages/core ./packages/core
+COPY packages/sdk ./packages/sdk
 COPY packages/relayer ./packages/relayer
 RUN pnpm install --frozen-lockfile --filter ferryline-relayer...
 RUN pnpm --filter ferryline-relayer... build
-RUN pnpm --filter ferryline-relayer deploy --prod /out
+# --legacy: pnpm >= 10 refuses to `deploy` a workspace unless inject-workspace-packages=true is set
+# repo-wide (see pnpm-workspace.yaml) — --legacy uses pnpm's pre-v10 deploy behavior (copying the
+# workspace dependencies' built files directly) instead, scoped to just this one build step rather
+# than changing how every other package in the workspace installs its own dependencies.
+RUN pnpm --filter ferryline-relayer deploy --prod --legacy /out
 
 FROM node:24-alpine
 ENV NODE_ENV=production PORT=8080

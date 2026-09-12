@@ -26,8 +26,6 @@ export interface MintAndForwardInputs {
   readonly forwarderContractId: string;
   readonly message: Uint8Array;
   readonly attestation: Uint8Array;
-  /** MEMO_TEXT-length transfer id, for on-chain correlation (same convention as the SDK's rails). */
-  readonly memoText: string;
 }
 
 export interface SubmittedMintAndForward {
@@ -54,6 +52,14 @@ export async function buildSignedFeeBumpMintAndForward(params: {
   inputs: MintAndForwardInputs;
   capStroops: bigint;
 }): Promise<{ envelopeXdr: string; feeBumpFeeStroops: bigint }> {
+  // NO memo: this is a Soroban InvokeHostFunctionOp, and Soroban transactions can never carry a
+  // memo (the SAME real bug, found and fixed independently in the SDK's own two outbound rail
+  // builders during widget-phase STEP 1 seam-proofing — confirmed with a real testnet RPC
+  // rejection: "Transaction contains a memo. Soroban transactions do not support memos." This
+  // third instance was caught by inspection before a real inbound delivery hit it live, while a
+  // real end-to-end inbound seam test was in progress). Correlation with `transfer.id` does not
+  // need a memo: the relayer's own real Postgres `transfers` table (options.repo) is the actual
+  // correlation mechanism — every step here is already keyed by `transfer.id`/`transfer.version`.
   const sourceAccount = await params.rpc.getAccount(params.sponsorAccount);
   const built = await buildInvocation({
     rpc: params.rpc,
@@ -65,7 +71,6 @@ export async function buildSignedFeeBumpMintAndForward(params: {
       message: params.inputs.message,
       attestation: params.inputs.attestation,
     }),
-    memoText: params.inputs.memoText,
   });
 
   const innerUnsigned = TransactionBuilder.fromXDR(built.xdr, params.networkPassphrase);

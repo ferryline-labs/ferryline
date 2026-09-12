@@ -32,19 +32,19 @@ export function describeTransferRepositoryContract(
             66,
           ),
         sourceDomain: 6,
-        amount: "1000000",
-        recipient: "GATISXX6BZ6NC7IKQBY37CJD4SOZL3CYZJWXEDG6JVIY4WBS6KXJHN6Q",
         ...overrides,
       };
     }
 
-    it("registers a transfer at status pending with version 1", async () => {
+    it("registers a transfer at status pending with version 1, amount and recipient unknown until attested", async () => {
       const repo = await makeRepo();
       const row = await repo.register(input());
       expect(row.status).toBe("pending");
       expect(row.version).toBe(1);
       expect(row.destinationTxHash).toBeNull();
       expect(row.errorCode).toBeNull();
+      expect(row.amount).toBeNull();
+      expect(row.recipient).toBeNull();
     });
 
     it("rejects a duplicate (sourceChain, sourceTxHash) registration", async () => {
@@ -64,6 +64,8 @@ export function describeTransferRepositoryContract(
       const row = await repo.register(input());
 
       const attested = await repo.transition(row.id, row.version, "attested", {
+        amount: "1000000",
+        recipient: "GATISXX6BZ6NC7IKQBY37CJD4SOZL3CYZJWXEDG6JVIY4WBS6KXJHN6Q",
         irisNonce: "0xabc",
         irisMessage: "0xdead",
         irisAttestation: "0xbeef",
@@ -73,6 +75,8 @@ export function describeTransferRepositoryContract(
       expect(attested.status).toBe("attested");
       expect(attested.version).toBe(row.version + 1);
       expect(attested.irisNonce).toBe("0xabc");
+      expect(attested.amount).toBe("1000000");
+      expect(attested.recipient).toBe("GATISXX6BZ6NC7IKQBY37CJD4SOZL3CYZJWXEDG6JVIY4WBS6KXJHN6Q");
 
       const submitting = await repo.transition(attested.id, attested.version, "submitting");
       expect(submitting.status).toBe("submitting");
@@ -174,6 +178,13 @@ export function describeTransferRepositoryContract(
       const repo = await makeRepo();
       const recipient = "GBZOXV2V4U4QOAE34EUM7CAQLHME434UFAVAPCSKGVBDDZPGD3Z3ADZJ";
       const otherRecipient = "GATISXX6BZ6NC7IKQBY37CJD4SOZL3CYZJWXEDG6JVIY4WBS6KXJHN6Q";
+      // countByRecipientSince reads the `recipient` column and `created_at` however they got there;
+      // recipient is only ever set via the attested transition (see db/schema.sql), so this test
+      // registers then attests each row rather than setting recipient at registration.
+      async function registerAndAttestTo(who: string) {
+        const row = await repo.register(input());
+        return repo.transition(row.id, row.version, "attested", { recipient: who });
+      }
 
       // A row from before the window: its own createdAt (as the repository itself assigned it, not
       // a JS-side Date racing the DB's clock) is the window boundary, so "since" is unambiguous
@@ -181,13 +192,13 @@ export function describeTransferRepositoryContract(
       // explicit gap guards against `before` and the first in-window row landing on the exact same
       // timestamp tick, which countByRecipientSince's `>= since` would (correctly, for the rolling
       // window's real semantics) include.
-      const before = await repo.register(input({ recipient: otherRecipient }));
+      const before = await registerAndAttestTo(otherRecipient);
       await new Promise((r) => setTimeout(r, 5));
       const since = new Date(before.createdAt.getTime() + 1);
 
-      const inWindowA = await repo.register(input({ recipient }));
-      const inWindowB = await repo.register(input({ recipient }));
-      await repo.register(input({ recipient: otherRecipient }));
+      const inWindowA = await registerAndAttestTo(recipient);
+      const inWindowB = await registerAndAttestTo(recipient);
+      await registerAndAttestTo(otherRecipient);
 
       // Both in-window rows must not have been created strictly before the boundary; if the
       // repository's clock resolution ever made that ambiguous, that is itself worth surfacing

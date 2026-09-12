@@ -1,0 +1,66 @@
+import { describe, expect, it } from "vitest";
+
+import { loadRelayerConfig } from "./config.js";
+
+function validEnv(): NodeJS.ProcessEnv {
+  return {
+    FERRYLINE_NETWORK: "mainnet",
+    DATABASE_URL: "postgres://user:pass@localhost:5432/ferryline",
+    FERRYLINE_STELLAR_RPC_URL: "https://soroban-rpc.example.com",
+  };
+}
+
+describe("loadRelayerConfig", () => {
+  it("succeeds with just the three genuinely required vars, using documented defaults for the rest", () => {
+    const config = loadRelayerConfig(validEnv());
+    expect(config).toMatchObject({
+      network: "mainnet",
+      databaseUrl: "postgres://user:pass@localhost:5432/ferryline",
+      rpcUrl: "https://soroban-rpc.example.com",
+      host: "0.0.0.0",
+      port: 8080,
+      pollIntervalMs: 2000,
+      pollMaxIntervalMs: 30_000,
+      maxConcurrentTransfers: 20,
+      registrationLimitMaxAttempts: 60,
+      registrationLimitWindowMs: 60_000,
+    });
+  });
+
+  it.each(["FERRYLINE_NETWORK", "DATABASE_URL", "FERRYLINE_STELLAR_RPC_URL"] as const)(
+    "throws when %s is unset — these three are genuinely required, unlike the load-balancing/performance knobs below",
+    (name) => {
+      const env = validEnv();
+      delete env[name];
+      expect(() => loadRelayerConfig(env)).toThrow(new RegExp(`${name} is required`));
+    },
+  );
+
+  it("throws with a specific message when FERRYLINE_NETWORK is set to something other than mainnet/testnet", () => {
+    const env = validEnv();
+    env["FERRYLINE_NETWORK"] = "devnet";
+    expect(() => loadRelayerConfig(env)).toThrow(/must be "mainnet" or "testnet"/);
+  });
+
+  it("honors an explicit override for every performance/load knob (STEP 4: these are allowed sensible defaults)", () => {
+    const config = loadRelayerConfig({
+      ...validEnv(),
+      HOST: "127.0.0.1",
+      PORT: "9090",
+      FERRYLINE_POLL_INTERVAL_MS: "500",
+      FERRYLINE_POLL_MAX_INTERVAL_MS: "5000",
+      FERRYLINE_MAX_CONCURRENT_TRANSFERS: "5",
+      FERRYLINE_REGISTRATION_LIMIT_MAX_ATTEMPTS: "10",
+      FERRYLINE_REGISTRATION_LIMIT_WINDOW_MS: "30000",
+    });
+    expect(config).toMatchObject({
+      host: "127.0.0.1",
+      port: 9090,
+      pollIntervalMs: 500,
+      pollMaxIntervalMs: 5000,
+      maxConcurrentTransfers: 5,
+      registrationLimitMaxAttempts: 10,
+      registrationLimitWindowMs: 30_000,
+    });
+  });
+});
