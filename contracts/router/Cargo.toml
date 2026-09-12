@@ -18,6 +18,22 @@ soroban-sdk = "27.0.6"
 
 [dev-dependencies]
 soroban-sdk = { version = "27.0.6", features = ["testutils"] }
+# Property-based testing: the ecosystem's own official pattern (see stellar/soroban-examples'
+# fuzzing/src/proptest.rs, pinned to soroban-sdk 27.0.0 — same major/minor as this crate's 27.0.6 —
+# and OpenZeppelin's audited stellar-contracts library, which uses proptest in production with
+# committed proptest-regressions/ files). Confirmed against real crates.io versions (2026-09-12),
+# not copied from a possibly-stale example without checking. See THREAT_MODEL.md and this crate's
+# STEP 1 report for why proptest (not cargo-fuzz) is the primary tool here: cargo-fuzz is native-only
+# too (it does not fuzz the WASM build either) but has an open, unresolved macOS ARM linking bug
+# (stellar/rs-soroban-sdk#1056) as of this writing, making it unsuitable as a required local
+# workflow on this machine; treat cargo-fuzz as optional / Linux-CI-only if added later.
+proptest = "1.11.0"
+# Pinned to ~1.3.0, not the newest 1.4.x: soroban-sdk 27.0.6 itself depends on arbitrary ~1.3.0
+# internally, and cargo cannot resolve two incompatible major.minor lines of the same crate in one
+# dependency graph — confirmed by actually running `cargo build --tests` and reading the resolver's
+# own conflict error, not assumed from the crates.io search result alone.
+arbitrary = { version = "1.3.0", features = ["derive"] }
+proptest-arbitrary-interop = "0.1.0"
 
 [profile.release]
 opt-level = "z"
