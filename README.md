@@ -9,12 +9,14 @@ bolted on later.
 
 **Status: real, tested, and merged, pre-alpha.** Every package below has shipped code, a real test
 suite, and (where the flow reaches an actual network) real, independently-verified transactions
-against Stellar testnet and mainnet, Ethereum Sepolia, and Circle's Iris attestation service. This
-is not a scaffold or a design document: 304 automated tests currently pass across five packages
-(60 core, 83 SDK, 116 relayer including live-database integration tests, 34 widget, 29 Soroban
-contract), and several real, on-chain transaction hashes are recorded and independently checkable
-right now, not merely claimed. See [Verified facts and honest gaps](#verified-facts-and-honest-gaps)
-below for exactly what's been proven versus what's still open.
+against Stellar testnet, Ethereum Sepolia, and Circle's Iris attestation service, nothing is on
+mainnet yet. This is not a scaffold or a design document: 304 automated tests currently pass across
+five packages (60 core, 83 SDK, 116 relayer including live-database integration tests, 34 widget, 29
+Soroban contract), and several real, on-chain transaction hashes are recorded and independently
+checkable right now, not merely claimed. See
+[Verified facts and honest gaps](#verified-facts-and-honest-gaps) below for exactly what's been
+proven versus what's still open, and [ARCHITECTURE.md](ARCHITECTURE.md) for a full technical
+write-up of how every piece actually works.
 
 ## Why this exists
 
