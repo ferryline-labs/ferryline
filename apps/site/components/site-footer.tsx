@@ -42,11 +42,25 @@ function FooterLink({
  * dashes repeats the page's own alignment grid inside the footer, per the doc's own note to do
  * exactly that. Real content only: brand + description, the same link set the nav and the
  * open-source section already point at, and a copyright line — no invented sitemap columns.
+ *
+ * A large, low-opacity "Ferryline" wordmark sits behind the real content, `aria-hidden` (it's
+ * decorative — the real, accessible brand name is the `text-text-2` line below it, unchanged).
+ * `text-title-0` (the page's single largest type size, otherwise unused anywhere on the page) at
+ * 6% opacity: big enough to read as a background mark rather than another heading, faint enough
+ * to never compete with the real content in front of it. `select-none` and `pointer-events-none`
+ * so it can never be selected or intercept a click; `overflow-hidden` on the footer itself already
+ * clips it if it runs wider than the viewport at any breakpoint.
  */
 export function SiteFooter(): ReactElement {
   return (
     <footer className="relative overflow-hidden bg-black">
       <GridOverlay variant="dark" />
+      <p
+        aria-hidden
+        className="pointer-events-none absolute inset-x-0 bottom-0 select-none whitespace-nowrap text-title-0 font-medium leading-none text-white/[0.06]"
+      >
+        Ferryline
+      </p>
       <Container className="relative py-[4.25rem] mobile-landscape:py-[3.125rem]">
         {/* No "desktop:" prefix needed for the wide layout — there's no min-width tier in this
             desktop-first screen set (see tailwind.config.ts): unprefixed classes already mean

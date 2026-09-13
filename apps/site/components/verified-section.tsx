@@ -19,11 +19,15 @@ const FINDINGS = [
  * divider under the header is a filled 1px strip, not a `border` utility — the same trick used
  * for every other hairline on the page. Wrapped in `StarBorder` like every other card, since it
  * doesn't go through the shared `Card` component.
+ *
+ * `bg-gray-900`, not `bg-black`: this section itself now carries `tone="dark"` (`bg-black`), so
+ * the panel needs its own, slightly lighter fill to still read as a distinct inset panel rather
+ * than disappearing into an identical black background.
  */
 function VerificationLog(): ReactElement {
   return (
     <StarBorder className="h-full rounded">
-      <div className="h-full rounded bg-black p-6">
+      <div className="h-full rounded bg-gray-900 p-6">
         <div className="flex items-center gap-2">
           <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-brand-on-dark" />
           <p className="font-mono text-text-4 uppercase tracking-wide text-on-dark-weak">
@@ -52,16 +56,22 @@ function VerificationLog(): ReactElement {
  * putting the heading above the grid left the card starting well below "Verified" with nothing
  * beside it, an empty gap at the top right of the section. Grouping eyebrow + title + paragraph
  * in one column lets the card start at the same row as the heading instead.
+ *
+ * `tone="dark"` — the one section-level surface inversion on the page: this section reads as a
+ * "statement" band (real evidence, not a marketing claim, gets the visual weight of the page's
+ * one other dark surface, the footer) rather than sitting on the same white ground as every other
+ * section. Reuses the existing dark token (`Section`'s own `dark` tone, `bg-black`), not a new
+ * color; body text switches to the matching `on-dark-*` roles already established for the footer.
  */
 export function VerifiedSection(): ReactElement {
   return (
-    <Section id="verified">
+    <Section id="verified" tone="dark">
       <div className="grid grid-cols-2 items-start gap-gutter tablet:grid-cols-1">
         <div>
           <Reveal
             as="p"
             variant="up"
-            className="text-title-3 font-medium uppercase text-on-surface-weak"
+            className="text-title-3 font-medium uppercase text-on-dark-weak"
           >
             Verified
           </Reveal>
@@ -69,15 +79,11 @@ export function VerifiedSection(): ReactElement {
             as="h2"
             variant="line"
             index={1}
-            className="mt-2 text-title-2 font-medium text-on-surface-dark"
+            className="mt-2 text-title-2 font-medium text-white"
           >
             Verified, not assumed
           </Reveal>
-          <Reveal
-            variant="up"
-            index={2}
-            className="mt-6 max-w-4-col text-text-3 text-on-surface-soft"
-          >
+          <Reveal variant="up" index={2} className="mt-6 max-w-4-col text-text-3 text-on-dark-weak">
             We don&apos;t assume how Stellar, LayerZero, or Circle behave. Every claim in this
             codebase is either checked against a real deployed contract or marked unverified, in the
             open, in the repo.
