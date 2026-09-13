@@ -1,5 +1,16 @@
 import type { Config } from "tailwindcss";
 
+import {
+  brand,
+  duration,
+  easing,
+  fontSize,
+  gray,
+  radius,
+  semantic,
+  spacing,
+} from "@ferryline/design-tokens";
+
 // Ferryline's design system, rebuilt as a literal port of a measured audit of trymeridian.com —
 // every name, number, and role below is the doc's own, not a rounded-off guess, with three
 // disclosed departures (two forced by contrast math, one a direct style request):
@@ -21,6 +32,13 @@ import type { Config } from "tailwindcss";
 //
 // No dark mode: the reference itself has none (one fixed light page, one black surface — the
 // footer), so this rebuild doesn't invent one either.
+//
+// The literal values (colors, radius, easing, duration, type scale, spacing) now live in
+// `@ferryline/design-tokens`, a plain-data package with no Tailwind or React dependency —
+// `packages/widget/tailwind.config.ts` imports the same object and extends its own theme
+// independently. This file still owns everything Tailwind-specific: `screens`, `boxShadow`,
+// `fontFamily`, `keyframes`/`animation`, and the actual `theme`/`extend` shape — only the raw
+// values moved out.
 const config: Config = {
   content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}"],
   theme: {
@@ -46,53 +64,47 @@ const config: Config = {
     // A full replacement: the doc's own radius scale is genuinely just four values, one of them
     // ("10px") doing almost all the work — expressed here as Tailwind's own `DEFAULT` key so the
     // bare `rounded` utility literally means "the site-wide default," matching the doc's framing.
-    borderRadius: {
-      none: "0",
-      DEFAULT: "10px", // r-10 — cards, buttons, images: the default for everything
-      xs: "4px", // r-4 — chips, tiny tags
-      lg: "20px", // r-20 — rare, large panels
-      full: "9999px", // r-round — pills and circles
-    },
+    borderRadius: radius,
     colors: {
       transparent: "transparent",
       current: "currentColor",
       black: "#000000",
       white: "#ffffff",
 
-      // The raw gray ramp, copied verbatim — neutral grays carry no brand identity, so there's no
-      // reason to depart from the doc's own values here.
-      "gray-50": "#eff0f0",
-      "gray-100": "#e2e2e3",
-      "gray-200": "#c5c7c8", // the ONLY border/divider color on the page
-      "gray-300": "#9da0a3",
-      "gray-400": "#888b8e",
-      "gray-500": "#75777a",
-      "gray-600": "#66696b",
-      "gray-700": "#454748",
-      "gray-800": "#202020",
-      "gray-900": "#0f1215",
+      // The raw gray ramp — neutral grays carry no brand identity, so there's no reason to depart
+      // from the doc's own values here. Sourced from @ferryline/design-tokens.
+      "gray-50": gray[50],
+      "gray-100": gray[100],
+      "gray-200": gray[200], // the ONLY border/divider color on the page
+      "gray-300": gray[300],
+      "gray-400": gray[400],
+      "gray-500": gray[500],
+      "gray-600": gray[600],
+      "gray-700": gray[700],
+      "gray-800": gray[800],
+      "gray-900": gray[900],
 
       // Ferryline's own brand hue — see the file-level comment for why this departs from the
       // doc's literal orange while everything else in this file doesn't.
-      brand: "#4F46E5",
-      "brand-soft": "#EEF0FF", // this project's own equivalent of orange-100
-      "brand-on-dark": "#818CF8", // brand indigo brightened for use ON black surfaces — the base
-      // `brand` value only clears 3.34:1 on black (fails 4.5:1 AA), the same "one hue needs two
-      // luminances depending on what it sits on" problem as `on-brand` above, just for accent use
-      // rather than fill. Verified: 7.04:1 on black.
+      brand: brand.DEFAULT,
+      "brand-soft": brand.soft, // this project's own equivalent of orange-100
+      "brand-on-dark": brand.onDark, // brand indigo brightened for use ON black surfaces — the
+      // base `brand` value only clears 3.34:1 on black (fails 4.5:1 AA), the same "one hue needs
+      // two luminances depending on what it sits on" problem as `on-brand` above, just for accent
+      // use rather than fill. Verified: 7.04:1 on black.
 
       // Semantic roles — the doc's own names, applied to the values above (corrected once, per
       // the file-level comment on `on-surface-weak`).
-      "on-brand": "#ffffff", // text ON the solid brand button — see file-level comment
-      "on-surface-dark": "#000000", // primary text
-      "on-surface-soft": "#454748", // secondary text (gray-700)
-      "on-surface-weak": "#66696b", // muted text on light surfaces — corrected, see file-level comment
-      "on-surface-weaker": "#c5c7c8", // border color (gray-200)
-      "on-surface-muted": "#eff0f0", // light card fill (gray-50)
-      "on-surface-light": "#ffffff", // text on dark surfaces
-      "on-dark-weak": "#9da0a3", // muted text specifically on the black footer, where the doc's
-      // own literal gray-300 passes fine (7.99:1) — kept separate from `on-surface-weak` because
-      // that one is corrected for light surfaces and would read too dark on black.
+      "on-brand": semantic.onBrand, // text ON the solid brand button — see file-level comment
+      "on-surface-dark": semantic.onSurfaceDark, // primary text
+      "on-surface-soft": semantic.onSurfaceSoft, // secondary text (gray-700)
+      "on-surface-weak": semantic.onSurfaceWeak, // muted text on light surfaces — corrected, see file-level comment
+      "on-surface-weaker": semantic.onSurfaceWeaker, // border color (gray-200)
+      "on-surface-muted": semantic.onSurfaceMuted, // light card fill (gray-50)
+      "on-surface-light": semantic.onSurfaceLight, // text on dark surfaces
+      "on-dark-weak": semantic.onDarkWeak, // muted text specifically on the black footer, where the
+      // doc's own literal gray-300 passes fine (7.99:1) — kept separate from `on-surface-weak`
+      // because that one is corrected for light surfaces and would read too dark on black.
     },
     extend: {
       fontFamily: {
@@ -103,45 +115,61 @@ const config: Config = {
         mono: ["var(--font-mono)", "ui-monospace", "SFMono-Regular", "monospace"],
       },
       // The doc's own fluid type ramp, literally — every clamp() below is copied from the doc's
-      // `:root` unchanged, with line-height and tracking baked in per role (never one constant
-      // applied everywhere: 0.88 at the largest size, tightening tracking as size grows). Tracking
-      // is the doc's own literal value at every size, unadjusted — the "-0.01em extra for Inter
-      // Tight" correction from the earlier build no longer applies now that the display face is
-      // Space Grotesk, with its own (wider, more geometric) natural proportions.
+      // `:root` unchanged (via @ferryline/design-tokens), with line-height and tracking baked in
+      // per role (never one constant applied everywhere: 0.88 at the largest size, tightening
+      // tracking as size grows). Tracking is the doc's own literal value at every size,
+      // unadjusted — the "-0.01em extra for Inter Tight" correction from the earlier build no
+      // longer applies now that the display face is Space Grotesk, with its own (wider, more
+      // geometric) natural proportions.
       fontSize: {
         "title-0": [
-          "clamp(3.75rem, 3.108rem + 3.21vw, 6rem)",
-          { lineHeight: "0.88", letterSpacing: "-0.07em" },
+          fontSize["title-0"].size,
+          {
+            lineHeight: fontSize["title-0"].lineHeight,
+            letterSpacing: fontSize["title-0"].letterSpacing,
+          },
         ],
         "title-1": [
-          "clamp(3.5rem, 3.072rem + 2.14vw, 5rem)",
-          { lineHeight: "0.95", letterSpacing: "-0.07em" },
+          fontSize["title-1"].size,
+          {
+            lineHeight: fontSize["title-1"].lineHeight,
+            letterSpacing: fontSize["title-1"].letterSpacing,
+          },
         ],
         "title-2": [
-          "clamp(2.5rem, 2.322rem + 0.89vw, 3.125rem)",
-          { lineHeight: "1.1", letterSpacing: "-0.05em" },
+          fontSize["title-2"].size,
+          {
+            lineHeight: fontSize["title-2"].lineHeight,
+            letterSpacing: fontSize["title-2"].letterSpacing,
+          },
         ],
         "title-3": [
-          "clamp(1.125rem, 1.089rem + 0.18vw, 1.25rem)",
-          { lineHeight: "1", letterSpacing: "-0.03em" },
+          fontSize["title-3"].size,
+          {
+            lineHeight: fontSize["title-3"].lineHeight,
+            letterSpacing: fontSize["title-3"].letterSpacing,
+          },
         ],
         "text-1": [
-          "clamp(1.5rem, 1.286rem + 1.07vw, 2.25rem)",
-          { lineHeight: "1.1", letterSpacing: "-0.05em" },
+          fontSize["text-1"].size,
+          {
+            lineHeight: fontSize["text-1"].lineHeight,
+            letterSpacing: fontSize["text-1"].letterSpacing,
+          },
         ],
         "text-2": [
-          "clamp(1.125rem, 1.089rem + 0.18vw, 1.25rem)",
-          { lineHeight: "1.4", letterSpacing: "-0.03em" },
+          fontSize["text-2"].size,
+          {
+            lineHeight: fontSize["text-2"].lineHeight,
+            letterSpacing: fontSize["text-2"].letterSpacing,
+          },
         ],
-        "text-3": ["1rem", { lineHeight: "1.32" }],
-        "text-4": ["0.75rem", { lineHeight: "1.2" }],
+        "text-3": [fontSize["text-3"].size, { lineHeight: fontSize["text-3"].lineHeight }],
+        "text-4": [fontSize["text-4"].size, { lineHeight: fontSize["text-4"].lineHeight }],
       },
       // The doc's own spacing constants that get reused by name across many files, kept as
       // tokens instead of retyped literals so the one clamp() string lives in one place.
-      spacing: {
-        gutter: "20px", // the universal grid/card gap
-        margin: "clamp(0.75rem, 0.608rem + 0.71vw, 1.25rem)", // page side padding, 12 → 20px
-      },
+      spacing,
       maxWidth: {
         "4-col": "456px", // hero copy, narrow paragraph blocks
         "6-col": "690px", // every section heading
@@ -149,15 +177,15 @@ const config: Config = {
       // The doc's own two easing curves and five durations — every transition on the page uses
       // one of these, never a sixth value.
       transitionTimingFunction: {
-        1: "cubic-bezier(0.17, 0.25, 0.30, 1.00)", // eas-1 — ~95% of all motion
-        2: "cubic-bezier(0.00, 0.00, 0.00, 1.00)", // eas-2 — violent ease-out, image settles only
+        1: easing[1], // eas-1 — ~95% of all motion
+        2: easing[2], // eas-2 — violent ease-out, image settles only
       },
       transitionDuration: {
-        1: "1000ms", // slow, big elements
-        2: "2000ms", // very slow, ambient
-        3: "500ms", // scroll reveals, dropdowns
-        btn: "300ms", // hover
-        "btn-fast": "150ms", // opacity on hover
+        1: duration[1], // slow, big elements
+        2: duration[2], // very slow, ambient
+        3: duration[3], // scroll reveals, dropdowns
+        btn: duration.btn, // hover
+        "btn-fast": duration.btnFast, // opacity on hover
       },
       keyframes: {
         "logo-loop": {

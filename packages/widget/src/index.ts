@@ -28,6 +28,7 @@ import type {
 } from "@ferryline/sdk";
 
 import { createWidgetClient, type WidgetClient } from "./client.js";
+import { GENERATED_STYLE } from "./generated-style.js";
 import { buildPreviewSummary, type PreviewSummary } from "./preview.js";
 import { registerTransfer, trackRelayerTransfer, type RelayerConfig } from "./relayer.js";
 import {
@@ -362,7 +363,7 @@ export class FerrylineWidget extends HTMLElement {
   private render(): void {
     const root = this.shadowRoot ?? this.attachShadow({ mode: "open" });
     root.innerHTML = `
-      <style>${STYLE}</style>
+      <style>${GENERATED_STYLE}</style>
       <div class="shell" part="shell">
         <div class="net" part="network">${this.network}</div>
         ${this.network === "testnet" ? renderFaucets() : ""}
@@ -392,11 +393,21 @@ export class FerrylineWidget extends HTMLElement {
         return `
           <p part="status">${STAGE_LABELS.created}</p>
           <div part="quote">
-            <div>Send: ${formatAmount(phase.quote.debit)}</div>
-            <div>Receive: ${formatAmount(phase.quote.credit)}</div>
-            ${phase.quote.etaSeconds ? `<div>ETA: ~${String(phase.quote.etaSeconds)}s</div>` : ""}
+            <div class="row">
+              <span class="row-label">Send</span>
+              <span class="row-value">${formatAmount(phase.quote.debit)}</span>
+            </div>
+            <div class="row">
+              <span class="row-label">Receive</span>
+              <span class="row-value">${formatAmount(phase.quote.credit)}</span>
+            </div>
+            ${
+              phase.quote.etaSeconds
+                ? `<div class="row"><span class="row-label">ETA</span><span class="row-value">~${String(phase.quote.etaSeconds)}s</span></div>`
+                : ""
+            }
           </div>
-          <button part="build-button" data-action="build">Build transaction</button>`;
+          <button class="cta" part="build-button" data-action="build">Build transaction</button>`;
       case "quote-failed":
         return `<p part="status" class="error">Quote failed: ${escapeHtml(phase.message)}</p>`;
       case "building":
@@ -413,11 +424,15 @@ export class FerrylineWidget extends HTMLElement {
             <h3 part="preview-heading">Review before you sign</h3>
             ${summary ? renderSummary(summary) : "<p>No further step to sign.</p>"}
             <div part="wallet-connect">
-              ${this.#connected ? `<span>Connected: ${escapeHtml(this.#connected.address)}</span>` : renderWalletModules(this.wallet())}
+              ${
+                this.#connected
+                  ? `<div class="row"><span class="row-label">Connected</span><span class="row-value">${escapeHtml(this.#connected.address)}</span></div>`
+                  : renderWalletModules(this.wallet())
+              }
             </div>
             <div class="actions">
-              <button part="cancel-button" data-action="cancel">Cancel</button>
-              <button part="confirm-button" data-action="confirm" ${this.#connected ? "" : "disabled"}>Confirm and sign</button>
+              <button class="cta cta-secondary" part="cancel-button" data-action="cancel">Cancel</button>
+              <button class="cta" part="confirm-button" data-action="confirm" ${this.#connected ? "" : "disabled"}>Confirm and sign</button>
             </div>
           </div>`;
       }
@@ -433,18 +448,18 @@ export class FerrylineWidget extends HTMLElement {
               ? `<div part="delivery-caveat" class="caveat">${OUTBOUND_CCTP_DELIVERY_CAVEAT}</div>`
               : ""
           }
-          ${phase.status.sourceTxHash ? `<div part="source-tx">Source tx: ${escapeHtml(phase.status.sourceTxHash)}</div>` : ""}`;
+          ${phase.status.sourceTxHash ? `<div part="source-tx" class="tx-hash">Source tx: ${escapeHtml(phase.status.sourceTxHash)}</div>` : ""}`;
       case "done":
         return `
           <p part="status">${STAGE_LABELS[phase.status.stage]}</p>
-          ${phase.status.destinationTxHash ? `<div part="dest-tx">Destination tx: ${escapeHtml(phase.status.destinationTxHash)}</div>` : ""}
+          ${phase.status.destinationTxHash ? `<div part="dest-tx" class="tx-hash">Destination tx: ${escapeHtml(phase.status.destinationTxHash)}</div>` : ""}
           ${phase.status.failure ? `<div part="failure" class="error">${escapeHtml(phase.status.failure.message)}</div>` : ""}
-          <button part="reset-button" data-action="reset">Start a new transfer</button>`;
+          <button class="cta" part="reset-button" data-action="reset">Start a new transfer</button>`;
       case "build-failed":
         return `<p part="status" class="error">Build failed: ${escapeHtml(phase.message)}</p>`;
       case "sign-failed":
         return `<p part="status" class="error">Signing failed: ${escapeHtml(phase.message)}</p>
-          <button part="reset-button" data-action="reset">Start over</button>`;
+          <button class="cta" part="reset-button" data-action="reset">Start over</button>`;
     }
   }
 
@@ -516,7 +531,7 @@ function renderWalletModules(wallet: WalletSession): string {
     .listModules()
     .map(
       (m) =>
-        `<button part="wallet-module-button" data-wallet-module="${m.productId}">${escapeHtml(m.productName)}</button>`,
+        `<button class="cta cta-secondary" part="wallet-module-button" data-wallet-module="${m.productId}">${escapeHtml(m.productName)}</button>`,
     )
     .join("");
 }
@@ -531,65 +546,33 @@ function renderSummary(summary: PreviewSummary): string {
         : `<div part="decoded-call">${escapeHtml(decoded.description)}</div>`;
   return `
     <div part="preview-summary">
-      <div>Rail: ${escapeHtml(RAIL_LABELS[summary.rail as RailId] ?? summary.rail)}</div>
-      <div>You send: ${escapeHtml(summary.debit)}</div>
-      <div>Recipient gets: ${escapeHtml(summary.credit)}</div>
-      <div>Destination: ${escapeHtml(summary.destination)}</div>
-      ${summary.fees.map((f) => `<div>Fee (${escapeHtml(f.label)}): ${escapeHtml(f.amount)} ${escapeHtml(f.symbol)}</div>`).join("")}
-      ${summary.dust ? `<div>Dust (not sent): ${escapeHtml(summary.dust)}</div>` : ""}
-      ${summary.etaSeconds ? `<div>ETA: ~${String(summary.etaSeconds)}s</div>` : ""}
+      <div class="row">
+        <span class="row-label">Rail</span>
+        <span class="row-value">${escapeHtml(RAIL_LABELS[summary.rail as RailId] ?? summary.rail)}</span>
+      </div>
+      <div class="row">
+        <span class="row-label">You send</span>
+        <span class="row-value">${escapeHtml(summary.debit)}</span>
+      </div>
+      <div class="row">
+        <span class="row-label">Recipient gets</span>
+        <span class="row-value">${escapeHtml(summary.credit)}</span>
+      </div>
+      <div class="row">
+        <span class="row-label">Destination</span>
+        <span class="row-value">${escapeHtml(summary.destination)}</span>
+      </div>
+      ${summary.fees
+        .map(
+          (f) =>
+            `<div class="row"><span class="row-label">Fee (${escapeHtml(f.label)})</span><span class="row-value">${escapeHtml(f.amount)} ${escapeHtml(f.symbol)}</span></div>`,
+        )
+        .join("")}
+      ${summary.dust ? `<div class="row"><span class="row-label">Dust (not sent)</span><span class="row-value">${escapeHtml(summary.dust)}</span></div>` : ""}
+      ${summary.etaSeconds ? `<div class="row"><span class="row-label">ETA</span><span class="row-value">~${String(summary.etaSeconds)}s</span></div>` : ""}
       ${decodedHtml}
     </div>`;
 }
-
-const STYLE = `
-  :host {
-    display: block;
-    font-family: var(--ferryline-font, system-ui, sans-serif);
-    font-size: var(--ferryline-font-size, 14px);
-    color: var(--ferryline-fg, #1a2531);
-    --ferryline-radius: var(--ferryline-border-radius, 8px);
-  }
-  .shell {
-    border: 1px solid var(--ferryline-border, #d3dce2);
-    border-radius: var(--ferryline-radius);
-    padding: var(--ferryline-spacing, 16px);
-    background: var(--ferryline-bg, #ffffff);
-  }
-  .net { font-size: 12px; color: var(--ferryline-muted, #54667a); text-transform: uppercase; letter-spacing: 0.08em; }
-  .error { color: var(--ferryline-danger, #c0392b); }
-  .caveat { color: var(--ferryline-muted, #54667a); font-size: 12px; margin: 6px 0; }
-  .faucets { font-size: 12px; margin: 4px 0; }
-  .faucets a { color: var(--ferryline-accent, #2c6fbb); }
-  button {
-    background: var(--ferryline-accent, #2c6fbb);
-    color: var(--ferryline-accent-fg, #ffffff);
-    border: none;
-    border-radius: var(--ferryline-radius);
-    padding: 8px 14px;
-    font-size: inherit;
-    cursor: pointer;
-  }
-  button:disabled { opacity: 0.5; cursor: not-allowed; }
-  .actions { display: flex; gap: 8px; margin-top: 8px; }
-  /* Mobile bottom-sheet layout (STEP 2D): below the breakpoint, the shell docks to the bottom of
-     the viewport instead of sitting inline, with a rounded top edge only - the standard mobile
-     "sheet" affordance. An integrator embedding this in their own bottom-sheet container can
-     still override position/inset via the :host selector's normal cascade if they need to. */
-  @media (max-width: 480px) {
-    :host {
-      position: fixed;
-      inset: auto 0 0 0;
-      z-index: var(--ferryline-z-index, 1000);
-    }
-    .shell {
-      border-radius: var(--ferryline-radius) var(--ferryline-radius) 0 0;
-      border-bottom: none;
-      max-height: 85vh;
-      overflow-y: auto;
-    }
-  }
-`;
 
 /** Register the element once. Safe to call more than once. */
 export function defineFerrylineWidget(tagName: string = WIDGET_TAG): void {

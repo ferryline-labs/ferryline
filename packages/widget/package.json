@@ -16,10 +16,11 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsup",
+    "build": "node scripts/build-style.mjs && tsup",
+    "build:style": "node scripts/build-style.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
-    "clean": "rm -rf dist .turbo"
+    "clean": "rm -rf dist .turbo src/generated-style.ts"
   },
   "dependencies": {
     "@creit.tech/stellar-wallets-kit": "^2.6.0",
@@ -29,9 +30,13 @@
     "viem": "^2.56.3"
   },
   "devDependencies": {
+    "@ferryline/design-tokens": "workspace:*",
     "@stellar/freighter-api": "^6.0.0",
+    "@tailwindcss/postcss": "^4.3.3",
     "happy-dom": "^20.14.3",
     "playwright": "^1.63.0",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^4.3.3",
     "vite": "^8.3.0"
   }
 }

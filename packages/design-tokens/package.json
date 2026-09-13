@@ -1,0 +1,26 @@
+{
+  "name": "@ferryline/design-tokens",
+  "version": "0.0.0",
+  "description": "Ferryline's design-system values (colors, radius scale, easing curves, type scale) as plain data — no Tailwind, no React, no build tooling. The single source apps/site and packages/widget each extend their own, independent tailwind.config.ts from.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "clean": "rm -rf dist .turbo"
+  },
+  "devDependencies": {}
+}

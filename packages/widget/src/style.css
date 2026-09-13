@@ -1,0 +1,173 @@
+/* `source(none)` disables Tailwind v4's own automatic filesystem-wide source detection — without
+   it, Tailwind scans the whole project tree by default (confirmed directly: a trivial one-class
+   test file with NO @config at all still compiled to 24KB/132 selectors) rather than respecting
+   only the explicit `content` array below. This package ships one small, known component; explicit
+   `content` is the correct, deterministic source of truth, not a repo-wide scan. */
+@import "tailwindcss" source(none);
+@config "../tailwind.config.ts";
+
+/*
+ * This file is never shipped as-is and never linked from a host page. The build step
+ * (scripts/build-style.mjs, run before tsup) compiles it with Tailwind's own PostCSS pipeline into
+ * plain, static CSS text and inlines that text into the STYLE constant in src/index.ts, which is
+ * injected into the widget's shadow root's own <style> tag at render time. A host page never needs
+ * Tailwind, never links this file, and never sees a Tailwind utility class name anywhere in its own
+ * DOM — see packages/widget/README.md's "Styling" section for the full mechanism.
+ *
+ * :host and other shadow-DOM-only selectors below aren't Tailwind utilities — Tailwind v4 leaves
+ * unrecognized selectors/at-rules alone rather than stripping them, so plain CSS can sit right next
+ * to @apply/utility classes in the same file.
+ *
+ * DESIGN DIRECTION (per direct feedback, superseding the first dark/StarBorder pass): a light,
+ * spacious, MoonPay-style product surface — white/near-white card, generous padding, each
+ * value on its own distinct rounded row (not run-in text), a big pill-shaped primary CTA, a plain
+ * soft drop-shadow instead of the site's animated StarBorder glow. Colors are still exclusively
+ * this project's own tokens (brand indigo, on-surface-* grays) — only the density/shape/surface
+ * tone changed, not the palette.
+ */
+
+:host {
+  display: block;
+  font-family: var(--ferryline-font, system-ui, sans-serif);
+  font-size: var(--ferryline-font-size, 15px);
+  color: var(--ferryline-fg, theme(colors.on-surface-dark));
+  --ferryline-radius: var(--ferryline-border-radius, theme(borderRadius.lg));
+}
+
+.shell {
+  @apply rounded-[var(--ferryline-radius)] bg-[var(--ferryline-bg,theme(colors.white))] p-6 shadow-[0_1px_2px_rgba(15,18,21,0.06),0_12px_32px_-8px_rgba(15,18,21,0.12)];
+}
+
+.net {
+  @apply text-xs uppercase tracking-wide text-[var(--ferryline-muted,theme(colors.on-surface-weak))];
+}
+
+.error {
+  @apply text-[var(--ferryline-danger,#dc2626)];
+}
+
+.caveat {
+  @apply my-2 rounded-xs bg-on-surface-muted p-3 text-xs text-on-surface-weak;
+}
+
+.faucets {
+  @apply my-1 text-xs text-on-surface-weak;
+}
+
+.faucets a {
+  @apply text-brand underline-offset-2 hover:underline;
+}
+
+.tx-hash {
+  @apply mt-2 break-all font-mono text-xs text-on-surface-weak;
+}
+
+/* Rounded, input-style rows for each amount/value shown to the user — the reference's own
+   "distinct field" treatment, not plain inline text. Each row is its own light-gray pill with the
+   label above/beside the value, spaced generously (my-2, not the old dense my-0 stack). */
+[part="quote"],
+[part="preview-summary"] {
+  @apply my-4 flex flex-col gap-2;
+}
+
+/* flex-wrap + min-w-0 on both children: a plain `flex justify-between` row refuses to let either
+   side shrink below its own content's natural width (flex items default to `min-width: auto`) —
+   a long value (a full Stellar/EVM address) or a long label (a verbose fee description) was
+   overflowing straight past the row's own rounded background instead of wrapping. Same fix as the
+   site's own transfer-preview card uses for the same reason (see
+   apps/site/components/transfer-preview.tsx's own comment on why its amount columns need
+   min-w-0). Neither side is `shrink-0` — a fee label can be just as long as an address value, so
+   both need to be free to shrink/wrap; `basis-auto` plus `min-w-0` lets each wrap its own words
+   independently rather than one side hogging the full row width and forcing the other off the
+   edge. Below ~200px of available width the label/value pair wraps to its own line instead of
+   squeezing onto one. */
+.row {
+  @apply flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-xs bg-on-surface-muted px-4 py-3;
+}
+
+.row-label {
+  @apply min-w-0 flex-1 text-sm text-on-surface-weak;
+}
+
+.row-value {
+  @apply min-w-0 flex-1 break-all text-right text-sm font-medium text-on-surface-dark;
+}
+
+button {
+  @apply cursor-pointer border-none text-[inherit] transition-colors duration-btn ease-1;
+}
+
+/* The single beacon accent, used the same surgically-restrained way as the site: the one solid
+   fill (build/confirm), never a decorative color elsewhere in the widget's chrome. Full-width,
+   heavily rounded (`rounded` = the site's own r-20 `lg` scale — a near-pill on a compact card),
+   generously padded — the reference's own dominant, unmissable primary-action treatment, not a
+   small inline button. */
+.cta {
+  @apply mt-2 block w-full rounded-lg bg-brand px-5 py-3.5 text-center text-sm font-medium text-on-brand hover:bg-[#443cc9] active:bg-brand;
+}
+
+.cta-secondary {
+  @apply bg-on-surface-muted text-on-surface-dark hover:bg-gray-200 active:bg-on-surface-muted;
+}
+
+.cta:disabled {
+  @apply cursor-not-allowed opacity-50;
+}
+
+/* Focus-visible ring — the site's own accessibility standard (apps/site/lib/styles.ts's
+   FOCUS_RING): a 2px solid outline, 2px offset. Plain CSS, not Tailwind's `outline`/
+   `outline-offset` utilities: Tailwind v4 implements those via
+   `outline-style: var(--tw-outline-style)`, relying on a `@property --tw-outline-style { ...
+   initial-value: solid }` registration elsewhere in the same stylesheet to supply the fallback
+   value. Verified directly (a standalone shadow-DOM repro, isolated from this widget) that an
+   `@property` registered inside a dynamically-injected shadow-root <style> tag does not actually
+   take effect for elements in that same shadow root — the custom property resolves empty, so
+   `outline-style` computes to `none` and the ring never renders, in every browser tested. Plain,
+   literal `outline: ...` sidesteps the indirection entirely and is unaffected by this limitation. */
+button:focus-visible,
+a:focus-visible {
+  outline: 2px solid #4f46e5; /* brand — @ferryline/design-tokens brand.DEFAULT */
+  outline-offset: 2px;
+}
+
+.actions {
+  @apply mt-2 flex flex-col gap-2;
+}
+
+.actions .cta {
+  @apply mt-0;
+}
+
+[part="preview"] {
+  @apply flex flex-col gap-1;
+}
+
+[part="preview-heading"] {
+  @apply m-0 mb-2 text-base font-medium text-on-surface-dark;
+}
+
+[part="decoded-call"] {
+  @apply mt-1 break-all rounded-xs bg-on-surface-muted p-3 text-xs text-on-surface-weak;
+}
+
+[part="wallet-connect"] {
+  @apply my-2 flex flex-col gap-2;
+}
+
+/* Mobile bottom-sheet layout (STEP 2D, preserved from the pre-restyle mechanism): below the
+   breakpoint, the shell docks to the bottom of the viewport instead of sitting inline, with a
+   rounded top edge only — the standard mobile "sheet" affordance. An integrator embedding this in
+   their own bottom-sheet container can still override position/inset via the :host selector's
+   normal cascade if they need to. */
+@media (max-width: 480px) {
+  :host {
+    position: fixed;
+    inset: auto 0 0 0;
+    z-index: var(--ferryline-z-index, 1000);
+  }
+  .shell {
+    @apply rounded-b-none;
+    max-height: 85vh;
+    overflow-y: auto;
+  }
+}

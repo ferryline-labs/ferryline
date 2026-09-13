@@ -3,6 +3,11 @@ dist/
 .turbo/
 coverage/
 *.tsbuildinfo
+
+# Compiled from packages/widget/src/style.css by packages/widget/scripts/build-style.mjs — a
+# build artifact like dist/, not hand-written source. Regenerate with `pnpm --filter
+# @ferryline/widget build:style` (or the widget's own `build` script, which runs it first).
+packages/widget/src/generated-style.ts
 .env
 .env.*
 !.env.example
