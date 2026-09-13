@@ -13,6 +13,9 @@ packages/widget/src/generated-style.ts
 !.env.example
 .DS_Store
 
+# Local-only scratch file, not part of the repo's real tracked content.
+scf-application-guide.md
+
 # Next.js
 .next/
 next-env.d.ts
