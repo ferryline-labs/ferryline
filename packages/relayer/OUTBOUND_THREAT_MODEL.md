@@ -1,11 +1,31 @@
 # Ferryline outbound CCTP relayer (Stellar → EVM) — threat model, STEP 1
 
 Status: **design only. No implementation exists.** This is the pre-code sign-off for a new,
-standalone relaying service, following the same STRIDE-outline structure the router's own
-`THREAT_MODEL.md` used at its own start (`## What are we working on?` / `## What can go wrong?`
-/ `## What are we going to do about it?`), and the same "verify, don't assume" standard every
-other design document in this repo holds itself to — every claim about the EXISTING inbound
-relayer below is cited to a real file in `packages/relayer/`, not reconstructed from memory.
+standalone relaying service.
+
+**Explicit note on the format choice below, checked directly rather than assumed**: this document
+uses the router's CURRENT, matured `THREAT_MODEL.md`'s three-part STRIDE-outline shape
+(`## What are we working on?` / `## What can go wrong?` / `## What are we going to do about it?`).
+That is a conscious, stated choice of a familiar, already-proven-useful shape for THIS document,
+not a claim that it reproduces a real Step-1 precedent from this repo's own history. Checked
+directly: neither the router's `SCOPE.md`/`THREAT_MODEL.md` nor the inbound relayer's own
+equivalent exists in git history as a separately-committed, genuinely pre-implementation artifact
+— both were first committed already matured, after real code and real testnet work, each
+narrating an earlier "STEP 1 sign-off" this repo never preserved as its own file
+(`git log --diff-filter=A` on both paths confirms this; the router's own THREAT_MODEL.md was
+first added in the same commit that also reports STEP 2 through STEP 8 complete). The one artifact
+in this repo that IS verifiably pre-code is `technical-doc.md`'s own `## Threat model outline`
+section (a plain `| Threat | Impact | Mitigation | Monitor |` table, explicitly labeled "the start
+of the threat model... it gets expanded in Week 7"). This document deliberately does NOT use that
+format instead — reasoning: `technical-doc.md`'s table is intentionally terse (one row per
+threat, a sentence or two each), appropriate for a whole-project pitch document covering many
+components at once, while this document needs the fuller, section-per-question depth the
+router's own STRIDE outline provides to actually answer the specific, detailed questions this
+design was asked to work through (trigger model, custody, spend adaptation, gas-market risk,
+multi-chain scope). The router's shape was picked for that reason, not because it is the
+historically accurate "how Phase 4 really started" template — no such template survives in this
+repo to copy. Every claim about the EXISTING inbound relayer below is cited to a real file in
+`packages/relayer/`, not reconstructed from memory.
 
 See `OUTBOUND_SCOPE.md` (this same directory) for what v1 explicitly does and does not do.
 
@@ -223,7 +243,7 @@ here as one list for a reviewer who wants the mitigation column without re-readi
   `nonceIsUsedOnStellar`-based logic exactly — never resubmit if the nonce is already consumed;
   always safe to resubmit if it is not, because CCTP nonces are one-shot on the destination side
   the same way they are on the source side.
-- **Scope discipline**: one destination chain for v1, Base Sepolia (or whichever chain has the
+- **Scope discipline**: one destination chain for v1, Ethereum Sepolia (or whichever chain has the
   most real, existing verified experience by the time implementation starts) recommended
   specifically, not a placeholder "pick one" — expansion is real, explicit, future work.
 
@@ -270,24 +290,129 @@ registration step providing it.
 
 ## Open questions needing sign-off before implementation starts
 
-1. **Package boundary**: does this live inside the existing `packages/relayer` (new modules,
-   sharing its Postgres instance/schema/deployment) or as a genuinely new package? This design
-   assumes the former (reusing schema/deployment/patterns directly) but that's a real choice, not
-   yet decided.
-2. **Widget/SDK wiring**: should a new `registerOutboundTransfer` method be added to the widget
-   alongside the existing `registerInboundTransfer`, wired automatically into the outbound send
-   flow, or left as a documented manual integration step the way inbound registration is today?
-   This is a product-surface decision, not a safety one, and belongs with whoever owns that
-   surface, not decided unilaterally in this document.
-3. **Destination chain choice for v1**: Base Sepolia is recommended above on "most existing real
-   verified experience," but this should be confirmed against whatever the actual real integrator
-   demand looks like once any exists, not decided purely on convenience.
-4. **How much of outbound traffic is expected to bypass the widget/SDK entirely** (a direct router
-   call from an unrelated integration): this materially affects whether the push model's
-   assumption (the registering caller already knows everything) holds broadly enough, or whether
-   the watch-based fallback mentioned above should be pulled into v1's own scope rather than left
-   fully deferred.
-5. **EVM RPC/library choice** for building, quoting gas, and submitting the `receiveMessage`
-   transaction (this design deliberately does not pick one — that's an implementation detail, not
-   a design-level safety question, the same way inbound's own design docs don't mandate a specific
-   Stellar SDK call shape beyond what's already in the real, shipped code).
+Each of these has a real decision behind it, not just a label — worked through here with the
+actual options, what each implies, and where I land, so sign-off means agreeing with a real
+argument, not just a name.
+
+### 1. Package boundary: new modules inside `packages/relayer`, or a genuinely new package?
+
+**Option A — inside `packages/relayer`** (this design's working assumption throughout). New
+directories (e.g. `src/outbound/`) alongside the existing inbound code, sharing the same Postgres
+instance, the same `db/schema.sql` (extended with new tables), the same deployment
+(`Dockerfile`/`docker-compose.yml`), the same `main.ts` process.
+
+- _Implies_: one service to deploy and operate, one database to back up, and direct code reuse of
+  `Signer`, the spend-ledger pattern, and the reconciliation-at-startup pattern without needing to
+  publish or version any of it as a shared library. The tradeoff: the two directions' work loops
+  would run in the same process, so a bug or resource exhaustion in one direction's polling logic
+  has more opportunity to affect the other's than if they were fully separate deployments (though
+  Node's own single-threaded event loop already means the inbound relayer's own two phases share
+  fate today, so this isn't a new category of risk, just extended to a third work loop).
+- **Option B — a new package** (`packages/outbound-relayer` or similar). Its own database (or its
+  own schema within a shared instance), its own deployment, potentially importing shared pieces
+  (`Signer`-shaped interfaces, spend-ledger table conventions) as documented patterns to follow
+  rather than literal shared code.
+- _Implies_: cleaner operational isolation (one direction's incident doesn't require touching the
+  other's deployment), but real duplication risk — the spend-ledger/crash-recovery pattern would
+  need to be re-implemented, not reused, unless a genuine shared library is extracted first (itself
+  new scope this design doesn't cover).
+- **My read**: Option A. The two directions are structurally near-identical (both: watch an
+  attestation service, hold one hot key, spend-cap-gate a completion transaction, recover via
+  on-chain nonce check at startup) and this project's own existing convention
+  (`@ferryline/core` shared by both the SDK and the relayer already) favors sharing real code over
+  duplicating a pattern that's already been debugged once. If operational isolation becomes a real
+  need later (e.g. wanting to scale/restart the two directions independently), that's a deployment
+  topology decision (two processes reading the same package, still one codebase) rather than a
+  reason to fork the code itself.
+
+### 2. Widget/SDK wiring: automatic registration, or a documented manual step?
+
+**Option A — a new `registerOutboundTransfer` method**, mirroring `registerInboundTransfer`
+exactly, wired automatically right after the widget's own outbound `send_cross_chain` call
+confirms on Stellar (the same moment `markSubmitted` already fires internally).
+
+- _Implies_: every outbound transfer sent through the widget gets automatic relay by default, with
+  zero extra integration work for anyone already using the widget — the strongest version of "this
+  gap is now closed" from a user's perspective. Cost: couples the widget's release cadence to the
+  relayer's own readiness (shipping the widget change means the relayer needs to already be live
+  and reachable, or the registration call needs its own graceful-failure handling so a
+  down/unreachable relayer doesn't block the widget's own already-working local flow).
+- **Option B — documented manual step**, mirroring how inbound registration is described in
+  `packages/relayer/README.md` today (a real, working, but opt-in integration a caller adds
+  themselves).
+- _Implies_: no coupling between widget releases and relayer readiness, and a natural place to
+  gate rollout (announce the new registration call as available, let integrators adopt it on their
+  own timeline) — but the default experience stays exactly as it is today (manual completion, per
+  the existing caveat) until each integrator specifically wires it in.
+- **My read**: leaning Option A, but explicitly flagging this as the one item on this list closest
+  to a genuine product call rather than a technical one — whoever owns the widget's own roadmap
+  and release process should weigh the coupling cost against how much the "closes automatically by
+  default" experience matters, which isn't a judgment this design document should make unilaterally
+  on their behalf.
+
+### 3. Destination chain choice for v1
+
+**The real options** are whichever EVM chains Circle's CCTP v2 actually supports as destinations
+today (a real, checkable list from Circle's own docs, not enumerated here since it can drift) —
+practically narrowed by which of those this project has ANY real, first-party experience with.
+Today that's exactly one: **Ethereum Sepolia**, confirmed directly from
+`packages/widget/e2e/harness.ts`'s real `to: { chain: "ethereum-sepolia" }` and
+`submit-receive-message.mjs`'s real `viem/chains` import — not a second candidate weighed against
+it, because no other chain has any real testnet run behind it in this repo yet.
+
+- _Implies choosing Sepolia_: the fastest path to a working v1, since the destination contract
+  address, the real gas/nonce-check RPC calls, and one full manually-completed transfer already
+  exist as a proven reference (`submit-receive-message.mjs` itself is close to a manual prototype
+  of exactly what this service automates). The real cost: Sepolia is a testnet — a genuine mainnet
+  v1 needs its own separate "which mainnet chain first" decision later, informed by real integrator
+  demand once any exists, which this document cannot substitute for.
+- _Implies choosing differently_: only sensible if there's already a specific, real integrator
+  asking for a different chain — in which case that demand should override "most existing
+  experience," since building for testnet-only convenience when a real mainnet user needs a
+  different chain would optimize for the wrong thing.
+- **My read**: Sepolia for the FIRST, testnet-proving build (reuses real, already-working
+  reference code directly); the actual mainnet destination-chain choice is a separate decision to
+  make later, explicitly informed by real demand, not decided now by default.
+
+### 4. How much outbound traffic is expected to bypass the widget/SDK entirely?
+
+This is the question the whole push-vs-watch recommendation above rests on, so it deserves being
+named as a real, checkable assumption rather than left implicit.
+
+- **If the answer is "very little, in practice"** (most real outbound CCTP-via-Ferryline traffic
+  goes through the widget or a direct SDK call that already calls `markSubmitted`): the push model
+  as designed is sufficient, full stop — every real caller already has the tx hash it needs to
+  register.
+- **If the answer is "a meaningful fraction bypasses it"** (someone calls the router contract
+  directly, e.g. from their own frontend, never touching `@ferryline/sdk`'s own tracking calls):
+  those transfers would never get registered under a pure push model, and would sit exactly as
+  undelivered as they do today, relayer or not — a real gap, not a hypothetical one, if this
+  fraction turns out to be non-trivial.
+- **How to actually find out, rather than guess**: this is checkable, not a permanent unknown —
+  once the router contract has real mainnet traffic (via Repud.1's now-shipped `TransferSent`
+  event), comparing on-chain `TransferSent` events against what the relayer actually got registered
+  for would give a real, measured bypass rate, not a guess. That comparison itself is a nice,
+  concrete use of the event this project just shipped.
+- **My read**: ship push-only for v1 (this is what the scope document already states), but treat
+  this specific question as the thing that would most directly justify building the watch-based
+  fallback mentioned in the push-vs-watch section — worth deciding to build it only once there's a
+  real measured bypass rate to justify the added complexity, not preemptively.
+
+### 5. EVM RPC/library choice
+
+**The real options**, at a glance: `viem` (already a real, existing dependency of both the SDK's
+`usdt0-layerzero` adapter and the widget itself — see `packages/sdk/package.json`/
+`packages/widget/package.json`) versus `ethers` (not currently used anywhere in this repo) versus
+a raw JSON-RPC client.
+
+- _Implies choosing viem_: zero new dependency to add, reuses a library this codebase's own
+  authors are already fluent in reading/debugging (the same adapter code this project has already
+  verified against real interfaces), and gives free access to the same real chain definitions
+  (`viem/chains`) the E2E test and manual completion script already import.
+- _Implies choosing anything else_: would need its own justification for why viem specifically is
+  unsuitable for this new service's needs — nothing about `receiveMessage`'s call shape suggests
+  it would be.
+- **My read**: viem, close to a non-decision given it's already a real, proven dependency
+  elsewhere in this exact codebase for this exact kind of call — flagged as its own numbered item
+  mainly for completeness (a genuine implementation-detail choice, not a design-level safety
+  question the way the other four are), not because there's a live debate to have about it.
