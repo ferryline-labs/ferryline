@@ -12,12 +12,14 @@ extern crate std;
 
 use soroban_sdk::{
     contract, contractimpl,
-    testutils::{storage::Instance as _, Address as _, Ledger as _, MockAuth, MockAuthInvoke},
-    Address, BytesN, Env, IntoVal, Symbol,
+    testutils::{storage::Instance as _, Address as _, Events as _, Ledger as _},
+    testutils::{MockAuth, MockAuthInvoke},
+    Address, BytesN, Env, Event as _, IntoVal, Symbol,
 };
 
 use crate::{
-    Dest, MessagingFee, Rail, Router, RouterClient, RouterError, SendParam, APPROVE_LEDGER_WINDOW,
+    Dest, MessagingFee, Rail, Router, RouterClient, RouterError, SendParam, TransferSent,
+    APPROVE_LEDGER_WINDOW,
 };
 
 /// A test double standing in for BOTH real rail contracts (CCTP's TokenMessengerMinter and the
@@ -870,12 +872,12 @@ fn elev_2_platform_reentrancy_prohibition_blocks_the_exact_attack_this_invariant
     client.send_cross_chain(&payer, &Rail::Usdc, &dest, &1_000_000i128);
 }
 
-/// SOURCE-ORDER PROOF: the volume-counter write in `dispatch_one_leg` is lexically AFTER EVERY
-/// `atomic_invoke` call in BOTH rail arms, not before any of them. Combined with the platform
-/// guarantee above (nothing can observe an intermediate state from outside), this proves the
-/// write-ordering property structurally — for any strategy, not just the one specific reentrant
-/// attempt the platform already blocks — rather than relying on a single behavioral test that
-/// could pass for the wrong reason.
+/// SOURCE-ORDER PROOF: the volume-counter write AND the `TransferSent` event publish (Repud.1) in
+/// `dispatch_one_leg` are both lexically AFTER EVERY `atomic_invoke` call in BOTH rail arms, not
+/// before any of them. Combined with the platform guarantee above (nothing can observe an
+/// intermediate state from outside), this proves the write-ordering property structurally — for
+/// any strategy, not just the one specific reentrant attempt the platform already blocks — rather
+/// than relying on a single behavioral test that could pass for the wrong reason.
 ///
 /// STEP 4: `dispatch_one_leg` grew from ONE `atomic_invoke` call site (the original CCTP-shaped
 /// call) to THREE across its two arms — CCTP's single real call, and LayerZero's `quote_send` THEN
@@ -883,12 +885,27 @@ fn elev_2_platform_reentrancy_prohibition_blocks_the_exact_attack_this_invariant
 /// hardcoded call-argument string, which no longer uniquely identifies "the" external call now
 /// that there is more than one), rather than narrowing the claim to only the call site that
 /// happened to still exist.
+///
+/// Repud.1: extended to cover `TransferSent`'s publish call too, after a mutation-testing pass
+/// found the event's OWN rollback test (`repud_1_a_rolled_back_leg_emits_no_event_...`) does not
+/// actually detect a mispositioned publish call — Soroban's own transaction semantics discard a
+/// reverted call's events regardless of where in `dispatch_one_leg` they were published, so that
+/// behavioral test alone cannot distinguish "correctly placed" from "wrongly placed but rolled
+/// back anyway." This structural, source-position check is what actually closes that gap — see
+/// `repud_1_a_rolled_back_leg_emits_no_event_...`'s own doc comment for the full finding.
 #[test]
 fn elev_2_volume_write_is_lexically_after_the_external_call_in_source() {
     let lib_rs = std::include_str!("lib.rs");
     let write_pos = lib_rs
         .find("DataKey::Volume(rail.clone())")
         .expect("volume-counter write not found in dispatch_one_leg");
+    // NOT a plain "TransferSent {" search — that also matches the struct's own DEFINITION
+    // earlier in this file (confirmed the hard way: an earlier version of this anchor matched
+    // the definition, byte position far too early, and made this assertion fail even for the
+    // real, correctly-ordered code). `.publish(env)` is unique to the actual call site.
+    let event_pos = lib_rs
+        .find("destination: dest_recipient(dest),")
+        .expect("TransferSent event publish not found in dispatch_one_leg");
 
     // Every real external-call site `dispatch_one_leg` can reach, named by the rail contract
     // function it invokes (formatting-robust: anchored on the function-name constant, which
@@ -908,6 +925,15 @@ fn elev_2_volume_write_is_lexically_after_the_external_call_in_source() {
              external call in the leg has actually returned, and this is a structural guard \
              against a future edit silently reordering the two",
             write_pos,
+            call_pos
+        );
+        assert!(
+            event_pos > call_pos,
+            "the TransferSent event publish (byte {}) must appear AFTER {label}'s call (byte {}) \
+             in dispatch_one_leg's source — Repud.1's event should describe an executed transfer, \
+             not an attempted one, and this is a structural guard against a future edit silently \
+             moving the publish call earlier",
+            event_pos,
             call_pos
         );
     }
@@ -1137,6 +1163,134 @@ fn spoof_1_constructor_argument_order_maps_usdc_and_usdt0_to_the_right_slot() {
     // And the USDC counter is untouched by an unrelated USDT0 send — a cross-check that the two
     // rails' bookkeeping (and, by extension, their contract-address resolution) are independent.
     assert_eq!(client.volume(&Rail::Usdc), 0);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Repud.1 — per-transfer event emission
+// ---------------------------------------------------------------------------------------------
+
+/// A single `send_cross_chain` call emits exactly one `TransferSent` event, and its fields are
+/// the REAL values from this call — not defaults, not the OTHER leg's values in a later batch
+/// test, so a copy/paste bug swapping which value goes where would show up here.
+#[test]
+fn repud_1_single_send_emits_transfer_sent_with_the_real_call_s_own_values() {
+    let (env, _usdc, _usdt0, client) = setup();
+    let payer = Address::generate(&env);
+    let recipient = [0x77; 32];
+    let dest = test_cctp_dest(&env, 6, recipient);
+    let amount: i128 = 42_000_000;
+
+    client
+        .mock_all_auths()
+        .send_cross_chain(&payer, &Rail::Usdc, &dest, &amount);
+
+    let expected = TransferSent {
+        payer: payer.clone(),
+        rail: Rail::Usdc,
+        destination: BytesN::from_array(&env, &recipient),
+        amount,
+    };
+    let expected_xdr = expected.to_xdr(&env, &client.address);
+
+    let events = env.events().all().filter_by_contract(&client.address);
+    assert_eq!(events.events(), &[expected_xdr]);
+}
+
+/// A batch of TWO legs emits TWO `TransferSent` events, one per leg, each carrying that leg's OWN
+/// rail/destination/amount — not one aggregate event for the whole batch, and not one event
+/// duplicated for both legs. Directly proves `Repud.1.R.1`'s "per successful leg" wording is what
+/// actually happens, not "per top-level call" (a plausible-but-wrong alternative reading this test
+/// would catch: `send_cross_chain_batch` calling `dispatch_one_leg` — the one place the event is
+/// emitted — for EVERY leg, not once for the whole batch).
+#[test]
+fn repud_1_batch_emits_one_transfer_sent_per_leg_not_one_per_batch() {
+    let (env, _usdc, _usdt0, client) = setup();
+    let payer = Address::generate(&env);
+    let first_recipient = [0xAA; 32];
+    let second_recipient = [0xBB; 32];
+    let first_amount: i128 = 10_000_000;
+    let second_amount: i128 = 20_000_000;
+    let legs = soroban_sdk::vec![
+        &env,
+        (
+            Rail::Usdc,
+            test_cctp_dest(&env, 6, first_recipient),
+            first_amount,
+        ),
+        (
+            Rail::Usdc,
+            test_cctp_dest(&env, 6, second_recipient),
+            second_amount,
+        ),
+    ];
+
+    client
+        .mock_all_auths()
+        .send_cross_chain_batch(&payer, &legs);
+
+    let first_expected = TransferSent {
+        payer: payer.clone(),
+        rail: Rail::Usdc,
+        destination: BytesN::from_array(&env, &first_recipient),
+        amount: first_amount,
+    }
+    .to_xdr(&env, &client.address);
+    let second_expected = TransferSent {
+        payer: payer.clone(),
+        rail: Rail::Usdc,
+        destination: BytesN::from_array(&env, &second_recipient),
+        amount: second_amount,
+    }
+    .to_xdr(&env, &client.address);
+
+    let events = env.events().all().filter_by_contract(&client.address);
+    assert_eq!(events.events(), &[first_expected, second_expected]);
+}
+
+/// The companion negative case Dos.1/Elev.2 already established for the `Volume` counter, now
+/// proven for the event too: a leg that panics and rolls back emits NO event, even though
+/// `dispatch_one_leg` had already built and was about to publish one for an EARLIER, individually
+/// valid leg in the same batch. Reuses the exact rollback mechanics
+/// `dos_1_one_leg_impossible_rolls_back_router_owned_state_too` already proved for `Volume`.
+///
+/// One real thing this test's own mutation-testing pass found, worth recording rather than
+/// leaving as an unstated assumption: Soroban's OWN transaction semantics discard a reverted
+/// call's published events, the same way they discard its storage writes — confirmed directly by
+/// deliberately moving the event-publish call to the very TOP of `dispatch_one_leg` (before the
+/// rail dispatch, unconditionally) and finding this test still passed. That mutation is a real
+/// bug (it makes `dispatch_one_leg`'s own code no longer match its doc comment's ordering claim,
+/// and produces a genuine DUPLICATE-event bug the batch test above catches instead — two
+/// `TransferSent` events per leg, one from each publish site), but it is not what THIS test
+/// actually detects; this test's real, narrow claim is platform-level (the host itself never lets
+/// a reverted transaction's events survive), not proof of `dispatch_one_leg`'s own code placement.
+/// The doc-comment-vs-code-ordering claim (Elev.2) is instead enforced the same way it already is
+/// for `Volume`: by `elev_2_volume_write_is_lexically_after_the_external_call_in_source`'s own
+/// source-text check, extended to cover the event publish call too — see that test.
+#[test]
+fn repud_1_a_rolled_back_leg_emits_no_event_even_for_an_earlier_valid_leg_in_the_same_batch() {
+    let (env, _usdc, _usdt0, client) = setup();
+    let payer = Address::generate(&env);
+    let legs = soroban_sdk::vec![
+        &env,
+        (
+            Rail::Usdc,
+            test_cctp_dest(&env, 6, [0xCC; 32]),
+            100_000_000i128,
+        ), // would succeed alone, and would emit an event alone
+        (Rail::Usdc, test_cctp_dest(&env, 6, [0xDD; 32]), -1i128), // guaranteed to fail
+    ];
+
+    let mocked = client.mock_all_auths();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        mocked.send_cross_chain_batch(&payer, &legs);
+    }));
+    assert!(result.is_err(), "expected the batch to panic");
+
+    // THE assertion: zero events from this contract survive the rollback — not even the one for
+    // the first leg, which was individually valid and reached `dispatch_one_leg`'s success path
+    // before the SECOND leg's panic unwound the whole transaction.
+    let events = env.events().all().filter_by_contract(&client.address);
+    assert_eq!(events.events(), &[]);
 }
 
 #[cfg(test)]

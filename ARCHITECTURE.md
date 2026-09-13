@@ -281,7 +281,7 @@ cannot work.
 
 ### `ferryline-router`
 
-Path: [contracts/router](contracts/router) · 29 tests · Soroban (Rust), its own Cargo workspace.
+Path: [contracts/router](contracts/router) · 32 tests · Soroban (Rust), its own Cargo workspace.
 
 ```rust
 // contracts/router/src/lib.rs (real, current public API)

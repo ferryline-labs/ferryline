@@ -19,11 +19,15 @@ interface OpenItem {
 }
 
 /**
- * The real, current, dated gap list — the same three items VERIFIED.md, THREAT_MODEL.md, and
+ * The real, current, dated gap list — the same items VERIFIED.md, THREAT_MODEL.md, and
  * ARCHITECTURE.md track as genuinely open right now, not invented "good first issue" filler. Kept
  * in sync by hand with those documents (they're the source of truth); if one of these resolves,
  * update or remove its row here the same way the docs themselves get a dated revision entry rather
  * than a silent edit.
+ *
+ * A third item, router per-transfer event emission (Repud.1), was here through 2026-09-12 and was
+ * removed 2026-09-13 once THREAT_MODEL.md's own Repud.1 row was updated to "implemented and
+ * tested as of STEP 9" — see that file for the real change, not reconstructed from memory here.
  */
 const OPEN_ITEMS: readonly OpenItem[] = [
   {
@@ -39,13 +43,6 @@ const OPEN_ITEMS: readonly OpenItem[] = [
     effort: "Needs a mainnet run",
     description:
       "Whether the OFT can deliver to a Soroban C-address at all is genuinely untested. Blocked on a funded mainnet operator and a smart account to target, not on code.",
-  },
-  {
-    key: "repud-1",
-    title: "Router event emission",
-    effort: "Contract change",
-    description:
-      "send_cross_chain and send_cross_chain_batch return () today — no per-transfer event exists yet. Needed before any on-chain metrics or adoption tracking can work.",
   },
 ];
 

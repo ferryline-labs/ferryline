@@ -6,10 +6,13 @@ you don't have to reverse-engineer the project's own standards from its git hist
 
 ## What this project actually is right now
 
-Six real, tested packages: `@ferryline/core`, `@ferryline/sdk`, `ferryline-relayer`,
-`@ferryline/widget`, `ferryline-router` (a Soroban contract, its own Cargo workspace), and
-`@ferryline/site` (the landing page you're probably reading this from a link on). 318 automated
-tests currently pass across all six (289 TypeScript, 29 Rust). Nothing is on mainnet yet. See
+Seven real, tested packages: `@ferryline/core`, `@ferryline/sdk`, `ferryline-relayer`,
+`@ferryline/widget`, `@ferryline/design-tokens` (shared design-token values, no framework
+dependency of its own), `ferryline-router` (a Soroban contract, its own Cargo workspace), and
+`@ferryline/site` (the landing page you're probably reading this from a link on). 337 automated
+tests currently pass across all seven (305 TypeScript, 32 Rust). `@ferryline/core` and
+`@ferryline/sdk` are the only two published to npm so far (both at `0.1.0`, real, live, public).
+Nothing is on mainnet yet. See
 [README.md](README.md) for what each package does and [ARCHITECTURE.md](ARCHITECTURE.md) for how
 they fit together technically.
 
@@ -56,7 +59,7 @@ Requirements: Node 22.12+ (CI uses 24), pnpm 11, Rust stable with the `wasm32v1-
 
 ```sh
 pnpm build            # turbo: builds every TypeScript package in dependency order
-pnpm test             # vitest in every package (289 TypeScript tests as of this writing)
+pnpm test             # vitest in every package (305 TypeScript tests as of this writing)
 pnpm typecheck
 pnpm lint             # eslint, zero errors expected
 pnpm format           # prettier --check, zero violations expected
@@ -64,7 +67,7 @@ pnpm format           # prettier --check, zero violations expected
 cd contracts/router
 cargo fmt --check
 cargo clippy --all-targets
-cargo test            # 29 tests
+cargo test            # 32 tests
 stellar contract build
 ```
 
@@ -118,15 +121,6 @@ whether delivery retries once one is added, is equally open, see the sibling
 [...-no-trustline.md](packages/core/verified/experiments/2026-09-11-inbound-usdt0-no-trustline.md)
 file. If you can fund a real mainnet operator account and run either experiment for real, that's a
 direct, high-value contribution, see each file's own header for exactly what's needed.
-
-### Router event emission (Repud.1)
-
-`send_cross_chain` and `send_cross_chain_batch` both return `()` today, no per-transfer event
-exists yet. Confirmed still unimplemented in
-[contracts/router/THREAT_MODEL.md](contracts/router/THREAT_MODEL.md)'s own Repud.1 row: "confirmed
-real, deferred, non-blocking scope." Needed before any on-chain metrics or adoption-milestone
-tracking can work. A contract change, with its own design pass (what fields belong in the event,
-what the router's own scope actually needs to expose) before implementation.
 
 ### Documentation
 

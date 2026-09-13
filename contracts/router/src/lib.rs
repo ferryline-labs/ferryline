@@ -21,8 +21,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, token, Address, Bytes, BytesN, Env,
-    IntoVal, Symbol, TryFromVal, Val, Vec,
+    contract, contracterror, contractevent, contractimpl, contracttype, token, Address, Bytes,
+    BytesN, Env, IntoVal, Symbol, TryFromVal, Val, Vec,
 };
 
 /// Bumped on every incompatible change to the router's public interface.
@@ -129,6 +129,49 @@ pub enum RouterError {
     /// `pack_destination` was given something other than exactly 32 bytes — rejected, never
     /// silently truncated or zero-padded (THREAT_MODEL.md, Info.1).
     InvalidDestinationLength = 1,
+}
+
+/// Repud.1's remediation (`Repud.1.R.1` in THREAT_MODEL.md): a structured event emitted per
+/// successful leg, so a disputed transfer has an independent, on-chain record of what actually
+/// executed, separate from and in addition to the aggregate `Volume` counter (Dos.2) — that
+/// counter can attest total volume moved, but nothing about any ONE transfer.
+///
+/// Fields are exactly the ones `Repud.1.R.1` names — payer, rail, destination, amount — and
+/// nothing else. "The exact args passed to `require_auth`" (the row's fourth requirement) is NOT
+/// a separate field: `send_cross_chain`/`send_cross_chain_batch`'s own `require_auth()` call
+/// authorizes the CURRENT INVOCATION'S full arguments by construction (see `send_cross_chain`'s
+/// own doc comment) — payer, rail, dest, and amount ARE those arguments. Capturing them here a
+/// second time as their own field would record the same values twice under a different name, not
+/// add a distinct fact.
+///
+/// `destination` is `BytesN<32>`, not the `Dest` enum itself: `Dest`'s own doc comment already
+/// establishes "recipient is always a fixed 32-byte destination address" as the one thing every
+/// rail's destination has in common — that's the durable, chain-agnostic value an off-chain
+/// indexer or disputed-transfer lookup actually needs, not the routing-internal
+/// `Cctp(domain, recipient, max_fee, threshold)`/`LayerZero(eid, to, refund)` shape (which also
+/// still contains an `Address`, not encodable as a plain event topic/data value the same way).
+/// `dest_recipient` extracts exactly this field from either variant — see that function.
+///
+/// `payer` and `rail` are `#[topic]` (low-cardinality, exactly what an indexer filters by); struct
+/// order otherwise matches `Repud.1.R.1`'s own listed order.
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TransferSent {
+    #[topic]
+    pub payer: Address,
+    #[topic]
+    pub rail: Rail,
+    pub destination: BytesN<32>,
+    pub amount: i128,
+}
+
+/// Extracts `Repud.1`'s "destination" field from either `Dest` variant — see `TransferSent`'s own
+/// doc comment for why this is the recipient bytes, not the enum itself.
+fn dest_recipient(dest: &Dest) -> BytesN<32> {
+    match dest {
+        Dest::Cctp(_, mint_recipient, _, _) => mint_recipient.clone(),
+        Dest::LayerZero(_, to, _) => to.clone(),
+    }
 }
 
 /// The exact function name every already-deployed rail contract this router calls exposes for
@@ -488,6 +531,19 @@ impl Router {
             .update(&DataKey::Volume(rail.clone()), |current: Option<i128>| {
                 current.unwrap_or(0) + amount
             });
+
+        // Repud.1: emitted at the SAME choke point and under the SAME ordering guarantee as the
+        // `Volume` write just above — both `send_cross_chain` and `send_cross_chain_batch` funnel
+        // every leg through this one function, so one call here covers both, and it is reached
+        // only on real success (Elev.2), never for a leg that panicked and rolled back. See
+        // `TransferSent`'s own doc comment for the field choices.
+        TransferSent {
+            payer: payer.clone(),
+            rail: rail.clone(),
+            destination: dest_recipient(dest),
+            amount,
+        }
+        .publish(env);
     }
 }
 
