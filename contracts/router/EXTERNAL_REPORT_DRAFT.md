@@ -1,33 +1,42 @@
 <!--
-DRAFT, genuinely complete as of its third revision — every finding below is real, confirmed, and
+DRAFT, genuinely complete as of its fourth revision — every finding below is real, confirmed, and
 cited to the same standard. Still NOT POSTED anywhere: ready for review before posting to Stellar's
 developer Discord / as a GitHub issue or discussion. This project's own name/identity is
 deliberately generic below ("my contract") — nothing here should be posted as-is if it would read
 as speaking for a specific project without that being intended.
 
-REVISION NOTE (third revision): adds a third, independent finding (Circle CCTP's off-chain
-attestation layer, not Soroban's own authorization framework) discovered separately, about 1.5
-hours after this draft's second revision was last edited. Kept in one report rather than split out,
-for the same reason the first two were combined: each is self-contained and independently
-readable, but a reader deciding whether real testnet/mainnet behavior can diverge from documented
-or expected behavior on Stellar-adjacent infrastructure benefits from seeing all three real
-examples together. Findings 1 and 2 are Soroban-platform-level (`soroban-env-host`'s own
-authorization matching); Finding 3 is a different system entirely (Circle's Iris attestation
-service, off-chain, not part of Soroban or the deployed CCTP contracts' own logic) — confirmed
-structurally UNRELATED to the first two, included here because it's the same class of lesson
-(real, first-party testing found real infrastructure behavior no documentation stated plainly),
-not because the underlying mechanisms are related.
+REVISION NOTE (fourth revision): adds a fourth, independent finding, narrower in scope than the
+first three, about how Soroban's own host internally represents a reverted call's published
+events at the exact source level (marked as belonging to a failed call, not deleted). Unlike
+Findings 1-3, Finding 4 is not a gap in documented behavior at the layer that behavior is
+documented at (`soroban-sdk`'s own client-facing doc comment on this exact behavior is accurate);
+it's a real, citable detail one layer below that documentation, relevant specifically to tooling
+built against raw ledger-close metadata rather than through the SDK's own convenience view.
+Discovered while adding a new per-transfer event to the same router contract these findings were
+built against. Kept in one report rather than split out, for the same reason the first three were:
+each is self-contained and independently readable, but a reader deciding whether real
+testnet/mainnet behavior can diverge from documented or expected behavior on Stellar-adjacent
+infrastructure benefits from seeing all four real examples together. Findings 1, 2, and 4 are all
+Soroban-platform-level (`soroban-env-host`'s own authorization matching and event-recording
+internals); Finding 3 is a different system entirely (Circle's Iris attestation service,
+off-chain) — confirmed structurally UNRELATED to the platform-level findings, included here
+because it's the same class of investigation (real, first-party testing and direct source-reading,
+not assumption), not because the underlying mechanisms are related.
+
+REVISION NOTE (third revision): added the CCTP Fast-Transfer finding (now Finding 3 below),
+discovered separately, about 1.5 hours after the second revision was last edited.
 -->
 
-# Three real surprises building on Stellar: two Soroban authorization footguns, and one Circle CCTP parameter that's silently reinterpreted, not honored or rejected
+# Four real surprises building on Stellar: three Soroban platform-level behaviors, and one Circle CCTP parameter that's silently reinterpreted, not honored or rejected
 
 ## Summary
 
 While building a Soroban router contract that moves funds through a token's `approve` and a
-second cross-contract call (in both single-call and batched-multi-leg forms), and while
-integrating Circle's CCTP v2 for USDC transfers out of Stellar, three distinct, real, confirmed
-surprises turned up — each invisible to local unit tests or published documentation alone, each
-only discoverable through real testnet deployment and a real, funded burn:
+second cross-contract call (in both single-call and batched-multi-leg forms), while integrating
+Circle's CCTP v2 for USDC transfers out of Stellar, and while later adding a per-transfer event to
+the same contract, four distinct, real, confirmed surprises turned up — each invisible to local
+unit tests or published documentation alone, each only discoverable through real testnet
+deployment, a real funded burn, or reading the platform's own vendored source directly:
 
 1. **A `require_auth`-covered argument computed from live ledger state can silently drift between
    simulate-time signing and real apply-time execution**, causing simulation to succeed completely
@@ -41,13 +50,27 @@ only discoverable through real testnet deployment and a real, funded burn:
    — not rejected, not honored, and nothing in the real transaction or its real submission response
    signals that the requested behavior didn't happen as asked. Confirmed with a real, funded,
    first-party burn, not inferred from documentation or from observing other operators' transactions.
+4. **A contract event published during a cross-contract call that later fails and rolls back is not
+   deleted by the host's own internal buffer, it is retroactively marked as belonging to a failed
+   call, at the exact moment and via the exact code path that also restores the rolled-back
+   storage.** `soroban-sdk`'s own client-facing behavior here is already correctly documented ("if
+   the last contract invocation failed, no events are returned"); the finding is one layer below
+   that, in the host's own internal representation, which real tooling built directly against raw
+   ledger-close metadata (rather than through that one SDK convenience view) would need to account
+   for separately.
 
 Findings 1 and 2 are not bugs in Soroban's authorization framework; they're real footguns in how a
 contract author can unintentionally construct an authorization-covered value or invocation shape.
 Finding 3 is not a bug in Circle's CCTP contracts either — the on-chain call genuinely succeeds; the
 silent reinterpretation happens in Circle's own off-chain attestation service, a system this
 project doesn't control and can't inspect the internals of, only observe the real, external
-behavior of. As far as we could find, none of the three is currently documented anywhere obvious.
+behavior of. Finding 4 is not a bug, and not a gap in documentation at the layer that documentation
+covers either — it's a real, citable internal-representation detail one layer below the SDK's own
+accurate, documented client-facing behavior. Findings 1, 2, and 3 describe behavior that surprised
+us and, as far as we could find, isn't written down anywhere obvious at the layer where a caller
+would encounter it; Finding 4 is different in kind, its top-level behavior IS already correctly
+documented, and what's undocumented is specifically the host-internal mechanism one layer beneath
+that documentation.
 
 ---
 
@@ -280,6 +303,150 @@ letting a caller believe their explicit choice was respected when it wasn't.
 
 ---
 
+## Finding 4: a reverted call's published events are marked as belonging to a failed call at the host level, not deleted, a distinction invisible through the SDK's own filtered view
+
+### Known, documented context, stated plainly, not the finding itself
+
+`soroban-sdk` 27.0.6's own `testutils::Events::all()` doc comment (`src/testutils.rs`) already says,
+correctly and directly: _"Returns all contract events that have been published by the last contract
+invocation. If the last contract invocation failed, no events are returned."_ A test built against
+that method observing zero events after a failed top-level call is exactly what the SDK's own
+documentation says will happen. That is not this finding, it is the already-correct, already-written
+behavior this finding's own investigation started from.
+
+### The mechanism, confirmed
+
+The actual finding is one level below that documented, client-facing behavior: what does the HOST
+itself do internally when a call fails, and does "no events are returned" (the SDK's own client-side
+view) mean the events were never recorded, or that they were recorded and then hidden from this one
+convenience method's output? The two are observably identical from inside `soroban-sdk`'s own
+testutils, but not identical in what actually exists in the underlying ledger-close event data, which
+matters for anything reading that data directly rather than through this one filtered view.
+
+`soroban-env-host` 27.0.1's `src/host/frame.rs`, `pop_context`, is the exact host code path that
+handles finishing a cross-contract call frame:
+
+```rust
+let mut auth_snapshot = None;
+if let Some(rp) = orp {
+    self.try_borrow_storage_mut()?.map = rp.storage;
+    self.try_borrow_events_mut()?.rollback(rp.events)?;
+    auth_snapshot = Some(rp.auth);
+}
+```
+
+`rp` (a `RollbackPoint`, captured when the frame was PUSHED, before the call ran) snapshots BOTH the
+storage map AND the events buffer's current length, in the same struct, at the same moment
+(`src/host/frame.rs`, `push_context`: `events: self.try_borrow_events()?.vec.len()`). If the frame is
+popped WITH a rollback point present (the call failed), both the storage map is restored to its
+pre-call snapshot AND `events.rollback(rp.events)` runs, on the same conditional branch, in the same
+few lines of code.
+
+What `events.rollback` actually does, in `src/events/internal.rs`, is the real finding:
+
+```rust
+/// "Rolls back" the event buffer starting at `events` by marking all
+/// subsequent events as failed calls.
+pub(crate) fn rollback(&mut self, events: usize) -> Result<(), HostError> {
+    for e in self.vec.iter_mut().skip(events) {
+        e.1 = EventError::FromFailedCall;
+    }
+    Ok(())
+}
+```
+
+It does not truncate the buffer or remove anything. Every event published since the rollback point
+stays in the internal buffer, permanently, with its status field changed from
+`EventError::FromSuccessfulCall` to `EventError::FromFailedCall`. When the host later externalizes
+these into the client-facing `Events` type, that status becomes a plain boolean field on each event:
+
+```rust
+vec.push(HostEvent {
+    event,
+    failed_call: *status == EventError::FromFailedCall,
+});
+```
+
+The event survives, with `failed_call: true`, in the host's own internal representation. What makes
+this indistinguishable from deletion when working through `soroban-sdk`'s testutils is one layer up,
+in the SAME `Events::all()` implementation whose doc comment is quoted above (`soroban-sdk`
+27.0.6's `src/events.rs`):
+
+```rust
+.filter_map(|e| {
+    if !e.failed_call
+        && e.event.type_ == xdr::ContractEventType::Contract
+        && e.event.contract_id.is_some()
+    {
+        Some(e.event)
+    } else {
+        None
+    }
+})
+```
+
+This filter is precisely why the doc comment's "no events are returned" claim is true and
+accurate, at the same time as the host's own record of those events continuing to exist. The two
+facts are not in tension, they are two different, both-correct descriptions of two different
+layers, the SDK's client-facing view is not lying about anything, but it also does not say (nor is
+it obviously in scope for it to say) that the underlying `failed_call: true` events are still
+present one layer down, in `HostEvent`, for anything reading raw ledger-close metadata directly
+rather than through this one convenience wrapper.
+
+### How this was found (methodology; the specific surprise was in what step 2/3 revealed, not in the top-level SDK behavior itself)
+
+1. Wrote a test asserting a batch's second, guaranteed-to-fail leg produces zero events (as reported
+   by `soroban-sdk`'s own `Events::all()`), even though the first leg (individually valid) had
+   already reached its own success path and published one. The test passed, correctly, exactly as
+   the SDK's own documented behavior predicts for a failed top-level invocation.
+2. Deliberately mutated the implementation to publish the event unconditionally, at the very start
+   of the per-leg function, before any success was possible, expecting the test above to catch this
+   as a real ordering bug, on the assumption that a mispositioned publish call was somehow
+   distinguishable from a correctly-positioned one once both got rolled back the same way.
+3. The test still passed. This is what prompted reading the host's own source rather than trusting
+   the passing test: a passing test is evidence of the OBSERVED, documented top-level behavior
+   (correctly, per the doc comment above), not evidence that the test's own premise about WHY it
+   passed (a mispositioned call is somehow distinguishable from a correct one, post-rollback) was
+   right. It was not, and reading `soroban-env-host`'s source (quoted above) is what showed why:
+   both the correct and mutated call sites get marked `FromFailedCall` identically once their
+   shared top-level invocation fails, because the host's rollback operates on a POSITION in the
+   event buffer, not on which specific call site published a given event.
+4. The same mutation WAS separately caught, by a different, independently-written test checking
+   that a batch with two SUCCESSFUL legs produces exactly one event per leg. The
+   unconditional-publish mutation produced two events per leg there (one from the wrong early call
+   site, one from the correct one that also still ran), a real, distinct, genuine duplicate-event
+   bug, just not the ordering property step 2 was trying to demonstrate.
+5. Added a structural, source-text-position test (the same category of guard already used
+   elsewhere in this contract for a storage-write ordering property) as the correct fix for the gap
+   step 3 surfaced, a rollback-behavior test cannot prove call-site ordering, only a direct check of
+   the source's own call order can.
+
+### How this differs from Findings 1-3
+
+Findings 1 and 2 are both about Soroban's own AUTHORIZATION matching; this finding involves no
+authorization logic at all, it is about the host's own EVENT-recording and frame-rollback
+machinery, a structurally separate subsystem. Finding 3 involves no Soroban host logic whatsoever,
+it is entirely Circle's own off-chain attestation behavior. This finding is also narrower in scope
+than the other three: it does not describe a bug, a footgun, or a behavior that differs from what
+official documentation says happens at the layer that documentation covers (the SDK's testutils
+doc comment is accurate). It describes an internal-representation detail one layer below that
+documentation, real and citable directly from `soroban-env-host`'s own source, relevant
+specifically to anyone building or auditing tooling against raw ledger-close event data rather than
+through `soroban-sdk`'s own convenience filter.
+
+### The lesson
+
+"If the last contract invocation failed, no events are returned" (soroban-sdk's own documented,
+correct claim about its own convenience view) is not the same claim as "the host never recorded
+those events." Both are true, at different layers, at the same time. Anyone who needs to reason
+about the actual, complete event history a Soroban transaction produced (an indexer, a block
+explorer, an auditor working from raw ledger-close metadata rather than through
+`soroban-sdk`'s testutils) should know the host's own internal representation marks a
+failed call's events rather than removing them (`EventError::FromFailedCall`, surfaced as
+`HostEvent.failed_call`), and should read that field directly rather than assume an SDK-level
+convenience method's filtered, documented-and-correct "no events" result means no host-level
+record exists at all.
+
 ## Search performed before writing this up
 
 For Findings 1 and 2: GitHub (`rs-soroban-env`, `soroban-sdk`/`rs-soroban-sdk`, `stellar-cli`,
@@ -301,6 +468,18 @@ accessible) were checked for this exact scenario — a caller-side value being s
 reinterpreted rather than rejected — and nothing describing it was found. This finding rests
 entirely on the two real burns described above, not on any third-party report.
 
+For Finding 4: GitHub (`rs-soroban-env`, `soroban-sdk`/`rs-soroban-sdk`), Stellar's developer
+Discord (via web-search proxies), Stellar Stack Exchange, and general web search were all checked
+for "soroban event failed_call", "soroban reverted call events", and the general scenario (does the
+host's internal event record survive a rolled-back cross-contract call, as distinct from what the
+SDK's own client-facing testutils report) before writing this section. `soroban-sdk`'s own
+`testutils::Events::all()` doc comment (quoted in the finding above) correctly documents the
+client-facing behavior; no discussion of the narrower, host-internal question (marked-failed vs.
+deleted) was found in any of the above channels. This finding rests entirely on reading the two
+crates' own vendored source directly (`soroban-env-host` 27.0.1, `soroban-sdk` 27.0.6, both quoted
+above) and a real, reproduced mutation-test result against that source, not on any third-party
+report.
+
 ## Suggestion for the docs/SDK
 
 The first two lessons could be called out explicitly in Stellar's authorization documentation
@@ -317,3 +496,14 @@ could state explicitly, next to Stellar's "Fast Transfer: N/A" row, what actuall
 caller requests `1000` anyway — accepted-and-silently-reinterpreted is a materially different,
 more surprising outcome for an integrator than either "rejected on-chain" or "rejected by Iris" would
 be, and none of the three is the default assumption a reader would form from "N/A" alone.
+
+For Finding 4: `soroban-sdk`'s own `Events::all()` doc comment already correctly documents the
+client-facing behavior ("if the last contract invocation failed, no events are returned") — no
+change needed there. What could usefully be added, either to that same doc comment or to
+`HostEvent`'s own documentation, is one sentence on the internal-representation side: that a
+failed call's events are retained by the host, marked `failed_call: true`, rather than removed,
+for the benefit of anyone reading raw ledger-close event data directly rather than through this
+convenience filter. A contract author writing a test against `Events::all()` has everything they
+need already documented; someone building an indexer or explorer against raw ledger-close metadata
+directly has nothing pointing them at `HostEvent.failed_call` today, and had to read
+`soroban-env-host`'s own source (as this finding did) to find it.
