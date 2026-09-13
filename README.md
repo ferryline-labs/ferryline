@@ -10,10 +10,10 @@ bolted on later.
 **Status: real, tested, and merged, pre-alpha.** Every package below has shipped code, a real test
 suite, and (where the flow reaches an actual network) real, independently-verified transactions
 against Stellar testnet, Ethereum Sepolia, and Circle's Iris attestation service, nothing is on
-mainnet yet. This is not a scaffold or a design document: 304 automated tests currently pass across
-five packages (60 core, 83 SDK, 116 relayer including live-database integration tests, 34 widget, 29
-Soroban contract), and several real, on-chain transaction hashes are recorded and independently
-checkable right now, not merely claimed. See
+mainnet yet. This is not a scaffold or a design document: 318 automated tests currently pass across
+six packages (60 core, 83 SDK, 116 relayer including live-database integration tests, 34 widget, 29
+Soroban contract, 14 site), and several real, on-chain transaction hashes are recorded and
+independently checkable right now, not merely claimed. See
 [Verified facts and honest gaps](#verified-facts-and-honest-gaps) below for exactly what's been
 proven versus what's still open, and [ARCHITECTURE.md](ARCHITECTURE.md) for a full technical
 write-up of how every piece actually works.
@@ -32,15 +32,16 @@ support into one integration.
 
 ## What we build
 
-Five pieces, each independently useful, and stronger together.
+Six pieces, each independently useful, and stronger together.
 
-| Package             | Path                                 | What it actually is                                                                                                                                      | Real tests |
-| ------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
-| `@ferryline/core`   | [packages/core](packages/core)       | Shared, network-free types and utilities every other package depends on.                                                                                 | 60         |
-| `@ferryline/sdk`    | [packages/sdk](packages/sdk)         | One TypeScript interface for both rails: `quote → build → sign → track`. Returns unsigned XDR, so it works with any wallet.                              | 83         |
-| `ferryline-relayer` | [packages/relayer](packages/relayer) | A real, running Fastify + PostgreSQL service that completes inbound (EVM → Stellar) CCTP delivery on the sender's behalf.                                | 98 + 18    |
-| `@ferryline/widget` | [packages/widget](packages/widget)   | A real, framework-agnostic `<ferryline-widget>` custom element wiring the SDK, a real wallet-kit session, and a transaction preview into one drop-in UI. | 34         |
-| `ferryline-router`  | [contracts/router](contracts/router) | A real, deployed Soroban contract so vaults, payroll, and escrow contracts can send cross-chain in a single call, including atomic multi-leg batches.    | 29         |
+| Package             | Path                                 | What it actually is                                                                                                                                                                          | Real tests |
+| ------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| `@ferryline/core`   | [packages/core](packages/core)       | Shared, network-free types and utilities every other package depends on.                                                                                                                     | 60         |
+| `@ferryline/sdk`    | [packages/sdk](packages/sdk)         | One TypeScript interface for both rails: `quote → build → sign → track`. Returns unsigned XDR, so it works with any wallet.                                                                  | 83         |
+| `ferryline-relayer` | [packages/relayer](packages/relayer) | A real, running Fastify + PostgreSQL service that completes inbound (EVM → Stellar) CCTP delivery on the sender's behalf.                                                                    | 98 + 18    |
+| `@ferryline/widget` | [packages/widget](packages/widget)   | A real, framework-agnostic `<ferryline-widget>` custom element wiring the SDK, a real wallet-kit session, and a transaction preview into one drop-in UI.                                     | 34         |
+| `ferryline-router`  | [contracts/router](contracts/router) | A real, deployed Soroban contract so vaults, payroll, and escrow contracts can send cross-chain in a single call, including atomic multi-leg batches.                                        | 29         |
+| `@ferryline/site`   | [apps/site](apps/site)               | The public landing page (Next.js App Router). Built on real content only: code samples matching the SDK's actual API, and a verification log citing this project's own real, dated findings. | 14         |
 
 ### `@ferryline/core` — the shared kernel
 
@@ -164,6 +165,18 @@ than needing its own integration with either rail:
   [contracts/router/THREAT_MODEL.md](contracts/router/THREAT_MODEL.md) for the invariant-by-invariant
   security reasoning and its own mutation-testing proof.
 
+### `@ferryline/site` — the public landing page
+
+A real Next.js 16 / React 19 app (App Router, static-prerendered, no server required to host it):
+a hero, a live interactive SDK demo (real `quote → build → track` code samples with keyboard-
+accessible tabs), an architecture overview, a "verified, not assumed" section whose verification
+log cites this project's own real, dated bugs (the CCTP hook-data length-prefix encoding, the
+Soroban auth-binding batch issue), and an open-source section pointing at the contributing guide.
+Every external link (docs, GitHub, contributing guide, license) is a real, explicit placeholder in
+[apps/site/lib/content.ts](apps/site/lib/content.ts) rather than an invented URL, since none of
+those destinations exist publicly yet. Not deployed anywhere public yet either, no hosting is wired
+up: `pnpm --filter @ferryline/site build` produces a static export you can serve yourself.
+
 ## Architecture
 
 ```mermaid
@@ -233,7 +246,7 @@ Requirements: Node 22.12+ (CI uses 24), pnpm 11, Rust stable with the `wasm32v1-
 ```sh
 pnpm install
 pnpm build            # turbo: builds every TypeScript package in dependency order
-pnpm test             # vitest in every package (304 tests as of this writing)
+pnpm test             # vitest in every package (318 tests as of this writing)
 pnpm typecheck
 pnpm lint             # eslint, zero errors expected
 pnpm format           # prettier --check, zero violations expected
@@ -260,6 +273,12 @@ pnpm vitest run --config vitest.integration.config.ts
 The widget additionally has a real, manual (and semi-scripted) end-to-end test against an actual
 installed browser wallet extension, see [packages/widget/e2e/README.md](packages/widget/e2e/README.md)
 for how to reproduce it.
+
+To view the landing page locally:
+
+```sh
+pnpm --filter @ferryline/site dev
+```
 
 ### Experiments
 

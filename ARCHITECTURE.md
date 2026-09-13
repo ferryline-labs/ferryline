@@ -454,9 +454,10 @@ one is added, or is the transfer permanently stuck?).
 
 Four tools each package uses:
 
-- **Unit and component tests** (`vitest`, 275 passing across four TypeScript packages) — the bulk
-  of coverage, run against real recorded fixtures (mainnet responses, real fixture-shaped test
-  data) wherever a live network call would otherwise be needed.
+- **Unit and component tests** (`vitest`, 289 passing across five TypeScript packages, four of them
+  money-moving code and one the public landing page) — the bulk of coverage, run against real
+  recorded fixtures (mainnet responses, real fixture-shaped test data) wherever a live network call
+  would otherwise be needed.
 - **Live-database integration tests** (relayer, 18 tests) — run against a real, disposable Postgres
   container (`docker compose up -d postgres`), not an in-memory stand-in, for the crash-recovery
   and spend-ceiling logic where that distinction actually matters.
