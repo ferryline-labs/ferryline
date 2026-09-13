@@ -27,11 +27,7 @@ export function Hero(): ReactElement {
           <Reveal as="h1" variant="line" index={0} className="text-title-2 font-medium text-black">
             One SDK for USDT0 and USDC.
           </Reveal>
-          <Reveal
-            variant="up"
-            index={1}
-            className="mt-6 text-text-2 text-on-surface-soft"
-          >
+          <Reveal variant="up" index={1} className="mt-6 text-text-2 text-on-surface-soft">
             Ferryline handles the decimals, trustlines, and relaying so your wallet or payout app
             doesn&apos;t have to. Built on the official LayerZero and <Mono>CCTP</Mono> rails.
           </Reveal>

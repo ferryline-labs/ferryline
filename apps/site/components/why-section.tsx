@@ -91,7 +91,12 @@ export function WhySection(): ReactElement {
           >
             Why
           </Reveal>
-          <Reveal as="h2" variant="line" index={1} className="mt-2 text-title-2 font-medium text-on-surface-dark">
+          <Reveal
+            as="h2"
+            variant="line"
+            index={1}
+            className="mt-2 text-title-2 font-medium text-on-surface-dark"
+          >
             Why this exists
           </Reveal>
           <Reveal variant="up" index={2} className="mt-6 text-text-3 text-on-surface-soft">

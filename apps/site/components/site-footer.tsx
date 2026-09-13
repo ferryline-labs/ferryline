@@ -58,7 +58,10 @@ export function SiteFooter(): ReactElement {
               One SDK for USDT0 and USDC, on and off Stellar. Open source and self-hostable.
             </p>
           </div>
-          <nav aria-label="Footer" className="flex flex-wrap justify-end gap-x-10 gap-y-4 tablet:justify-start">
+          <nav
+            aria-label="Footer"
+            className="flex flex-wrap justify-end gap-x-10 gap-y-4 tablet:justify-start"
+          >
             {FOOTER_LINKS.map((link) => (
               <FooterLink key={link.label} {...link} />
             ))}

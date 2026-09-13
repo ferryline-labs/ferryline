@@ -42,7 +42,10 @@ export function TransferPreview(): ReactElement {
       <div className="rounded shadow-card">
         <Card>
           <div className="flex items-center gap-2">
-            <span aria-hidden className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-brand" />
+            <span
+              aria-hidden
+              className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-brand"
+            />
             <p className="text-text-4 uppercase text-on-surface-weak">Example quote</p>
           </div>
 

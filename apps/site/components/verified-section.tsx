@@ -65,13 +65,22 @@ export function VerifiedSection(): ReactElement {
           >
             Verified
           </Reveal>
-          <Reveal as="h2" variant="line" index={1} className="mt-2 text-title-2 font-medium text-on-surface-dark">
+          <Reveal
+            as="h2"
+            variant="line"
+            index={1}
+            className="mt-2 text-title-2 font-medium text-on-surface-dark"
+          >
             Verified, not assumed
           </Reveal>
-          <Reveal variant="up" index={2} className="mt-6 max-w-4-col text-text-3 text-on-surface-soft">
+          <Reveal
+            variant="up"
+            index={2}
+            className="mt-6 max-w-4-col text-text-3 text-on-surface-soft"
+          >
             We don&apos;t assume how Stellar, LayerZero, or Circle behave. Every claim in this
-            codebase is either checked against a real deployed contract or marked unverified, in
-            the open, in the repo.
+            codebase is either checked against a real deployed contract or marked unverified, in the
+            open, in the repo.
           </Reveal>
         </div>
 

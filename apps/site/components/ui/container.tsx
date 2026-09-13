@@ -14,7 +14,5 @@ interface ContainerProps {
  * `margin` is the doc's own clamp: 12px at 320px viewport → 20px at 1440px.
  */
 export function Container({ children, className }: ContainerProps): ReactElement {
-  return (
-    <div className={cx("mx-auto w-full max-w-[1440px] px-margin", className)}>{children}</div>
-  );
+  return <div className={cx("mx-auto w-full max-w-[1440px] px-margin", className)}>{children}</div>;
 }

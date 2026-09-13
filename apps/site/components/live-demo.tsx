@@ -170,7 +170,9 @@ export function LiveDemo(): ReactElement {
               onKeyDown={handleKeyDown}
               className={cx(
                 "relative min-h-11 px-4 text-text-3 transition-colors duration-200",
-                selected ? "text-on-surface-dark" : "text-on-surface-weak hover:text-on-surface-dark",
+                selected
+                  ? "text-on-surface-dark"
+                  : "text-on-surface-weak hover:text-on-surface-dark",
                 FOCUS_RING,
               )}
             >

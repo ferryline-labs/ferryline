@@ -22,9 +22,7 @@ export function Stepper({ steps, activeStep }: StepperProps): ReactElement {
                 active ? "bg-brand" : "bg-on-surface-weaker",
               )}
             />
-            <span className={active ? "text-on-surface-dark" : "text-on-surface-weak"}>
-              {step}
-            </span>
+            <span className={active ? "text-on-surface-dark" : "text-on-surface-weak"}>{step}</span>
           </li>
         );
       })}

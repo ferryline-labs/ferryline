@@ -17,10 +17,7 @@ interface SectionProps {
  */
 export function Section({ id, className, children }: SectionProps): ReactElement {
   return (
-    <section
-      id={id}
-      className={cx("py-[4.25rem] mobile-landscape:py-[3.125rem]", className)}
-    >
+    <section id={id} className={cx("py-[4.25rem] mobile-landscape:py-[3.125rem]", className)}>
       <Container>{children}</Container>
     </section>
   );

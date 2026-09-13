@@ -35,7 +35,8 @@ const config: Config = {
     // (both purely atmospheric, on the footer's decorative globe) — no general elevation scale.
     boxShadow: {
       none: "none",
-      globe: "0 6px 100px 60px rgba(79, 70, 229, 0.30), inset 0 6px 80px 60px rgba(192, 193, 159, 0.35)",
+      globe:
+        "0 6px 100px 60px rgba(79, 70, 229, 0.30), inset 0 6px 80px 60px rgba(192, 193, 159, 0.35)",
       // A soft brand-tinted lift for the one card that floats directly over the hero's own
       // gradient (see hero.tsx) — a glow layer (indigo, wide, low-opacity) plus a tighter
       // neutral contact layer for grounding. Deliberately one of two shadow recipes on the whole
@@ -108,12 +109,30 @@ const config: Config = {
       // Tight" correction from the earlier build no longer applies now that the display face is
       // Space Grotesk, with its own (wider, more geometric) natural proportions.
       fontSize: {
-        "title-0": ["clamp(3.75rem, 3.108rem + 3.21vw, 6rem)", { lineHeight: "0.88", letterSpacing: "-0.07em" }],
-        "title-1": ["clamp(3.5rem, 3.072rem + 2.14vw, 5rem)", { lineHeight: "0.95", letterSpacing: "-0.07em" }],
-        "title-2": ["clamp(2.5rem, 2.322rem + 0.89vw, 3.125rem)", { lineHeight: "1.1", letterSpacing: "-0.05em" }],
-        "title-3": ["clamp(1.125rem, 1.089rem + 0.18vw, 1.25rem)", { lineHeight: "1", letterSpacing: "-0.03em" }],
-        "text-1": ["clamp(1.5rem, 1.286rem + 1.07vw, 2.25rem)", { lineHeight: "1.1", letterSpacing: "-0.05em" }],
-        "text-2": ["clamp(1.125rem, 1.089rem + 0.18vw, 1.25rem)", { lineHeight: "1.4", letterSpacing: "-0.03em" }],
+        "title-0": [
+          "clamp(3.75rem, 3.108rem + 3.21vw, 6rem)",
+          { lineHeight: "0.88", letterSpacing: "-0.07em" },
+        ],
+        "title-1": [
+          "clamp(3.5rem, 3.072rem + 2.14vw, 5rem)",
+          { lineHeight: "0.95", letterSpacing: "-0.07em" },
+        ],
+        "title-2": [
+          "clamp(2.5rem, 2.322rem + 0.89vw, 3.125rem)",
+          { lineHeight: "1.1", letterSpacing: "-0.05em" },
+        ],
+        "title-3": [
+          "clamp(1.125rem, 1.089rem + 0.18vw, 1.25rem)",
+          { lineHeight: "1", letterSpacing: "-0.03em" },
+        ],
+        "text-1": [
+          "clamp(1.5rem, 1.286rem + 1.07vw, 2.25rem)",
+          { lineHeight: "1.1", letterSpacing: "-0.05em" },
+        ],
+        "text-2": [
+          "clamp(1.125rem, 1.089rem + 0.18vw, 1.25rem)",
+          { lineHeight: "1.4", letterSpacing: "-0.03em" },
+        ],
         "text-3": ["1rem", { lineHeight: "1.32" }],
         "text-4": ["0.75rem", { lineHeight: "1.2" }],
       },
@@ -141,8 +160,14 @@ const config: Config = {
         "btn-fast": "150ms", // opacity on hover
       },
       keyframes: {
-        "logo-loop": { "0%": { transform: "translateX(0)" }, "100%": { transform: "translateX(-100%)" } },
-        "globe-spin": { "0%": { transform: "rotate(0deg)" }, "100%": { transform: "rotate(360deg)" } },
+        "logo-loop": {
+          "0%": { transform: "translateX(0)" },
+          "100%": { transform: "translateX(-100%)" },
+        },
+        "globe-spin": {
+          "0%": { transform: "rotate(0deg)" },
+          "100%": { transform: "rotate(360deg)" },
+        },
         // A dot traveling left-to-right along the hero card's connector (source to destination,
         // Arbitrum to Stellar — see transfer-preview.tsx), fading in/out at each end so it never
         // looks like it's teleporting — slow and ambient (2.8s), the same register as the globe
