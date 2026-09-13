@@ -1,8 +1,16 @@
 {
   "name": "@ferryline/core",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Shared types, decimal and address utilities, and the RailAdapter interface for Ferryline.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ferryline-labs/ferryline.git",
+    "directory": "packages/core"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -20,7 +28,9 @@
     "build": "tsup",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
-    "clean": "rm -rf dist .turbo"
+    "clean": "rm -rf dist .turbo",
+    "prepack": "node scripts/prepare-publish.mjs strip",
+    "postpack": "node scripts/prepare-publish.mjs restore"
   },
   "dependencies": {
     "@stellar/stellar-sdk": "^17.0.1",

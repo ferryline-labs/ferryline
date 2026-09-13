@@ -1,8 +1,16 @@
 {
   "name": "@ferryline/sdk",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "One interface for moving USDT0 and USDC in and out of Stellar: quote, build, sign, track.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ferryline-labs/ferryline.git",
+    "directory": "packages/sdk"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -13,7 +21,8 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "CHANGELOG.md"
   ],
   "sideEffects": false,
   "scripts": {
@@ -22,7 +31,9 @@
     "test": "vitest run",
     "clean": "rm -rf dist .turbo",
     "record:usdt0-fixtures": "tsx scripts/record-usdt0-mainnet-fixtures.ts",
-    "record:cctp-fixtures": "tsx scripts/record-cctp-mainnet-fixtures.ts"
+    "record:cctp-fixtures": "tsx scripts/record-cctp-mainnet-fixtures.ts",
+    "prepack": "node scripts/prepare-publish.mjs strip",
+    "postpack": "node scripts/prepare-publish.mjs restore"
   },
   "dependencies": {
     "@ferryline/core": "workspace:*",
