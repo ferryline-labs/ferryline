@@ -1,12 +1,20 @@
 // @ts-check
 import js from "@eslint/js";
 import prettier from "eslint-config-prettier";
+import reactHooks from "eslint-plugin-react-hooks";
 import globals from "globals";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: ["**/dist/**", "**/node_modules/**", "**/.turbo/**", "contracts/**", "coverage/**"],
+    ignores: [
+      "**/dist/**",
+      "**/.next/**",
+      "**/node_modules/**",
+      "**/.turbo/**",
+      "contracts/**",
+      "coverage/**",
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
@@ -36,6 +44,21 @@ export default tseslint.config(
     // Operator-run scripts talk to a terminal on purpose.
     files: ["experiments/**/*.ts", "**/scripts/**/*.ts"],
     rules: { "no-console": "off" },
+  },
+  {
+    // The site is the one React surface in the repo: enable JSX-aware hooks linting there only.
+    files: ["apps/site/**/*.{ts,tsx}"],
+    plugins: { "react-hooks": reactHooks },
+    rules: {
+      ...reactHooks.configs.recommended.rules,
+    },
+  },
+  {
+    files: ["apps/site/**/*.test.{ts,tsx}"],
+    rules: {
+      "@typescript-eslint/explicit-module-boundary-types": "off",
+      "no-console": "off",
+    },
   },
   {
     files: ["**/*.test.ts"],

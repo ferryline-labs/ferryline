@@ -21,9 +21,13 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # build first: packages/widget imports @ferryline/core and @ferryline/sdk as package
+      # dependencies, and the type-aware eslint rules below can only resolve those imports once
+      # each package's dist/*.d.ts exists. Linting before building left widget's imports
+      # unresolved on a clean checkout, tripping @typescript-eslint/no-unsafe-* everywhere.
+      - run: pnpm build
       - run: pnpm lint
       - run: pnpm format
-      - run: pnpm build
       - run: pnpm typecheck
       - run: pnpm test
 
