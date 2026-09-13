@@ -1,0 +1,56 @@
+@import "tailwindcss";
+@config "../tailwind.config.ts";
+
+@layer base {
+  * {
+    /* The doc's one border color, as a default so any element that turns on a border via a plain
+       `border` utility (never `border-*-<color>`) gets the right one automatically. There is
+       exactly one place on the page that still needs a real `border-width` (the gray-outlined
+       "light" button variant) — everywhere else, separation is a background step or a filled 1px
+       div, per the doc's own "only border color on the site" note. */
+    @apply border-on-surface-weaker;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    /* Set on both html and body, not just body: overflow-x on body is only guaranteed to reach
+       the actual viewport scroll box via the UA's overflow-propagation rule, which some mobile
+       browser engines have historically honored inconsistently. Setting it on html directly
+       doesn't depend on that propagation at all. */
+    overflow-x: hidden;
+  }
+
+  body {
+    @apply bg-white font-sans text-on-surface-dark antialiased;
+    /* The reveal system (ui/reveal.tsx) scales not-yet-revealed content up to 1.1–1.2× inside
+       `overflow: visible` ancestors — required so the reveal can grow *into* place instead of
+       being clipped, per the doc's own note that this is a scale reveal, never a clip/mask one.
+       Off-screen sections below the fold sit in that oversized pre-reveal state until scrolled
+       into view, which can technically extend the document's scrollable width before it settles.
+       This is the standard fix: allow the transform to render past the edge visually (nothing
+       here changes what Reveal does) while never letting the page actually scroll horizontally
+       or show a scrollbar for it. */
+    overflow-x: hidden;
+  }
+
+  ::selection {
+    @apply bg-brand text-on-brand;
+  }
+}
+
+/* Reduced motion: every non-essential animation goes fully static, not just faster — including
+   the globe spin and logo marquee loop, both infinite/ambient and exactly the kind of motion this
+   media query exists to kill. */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

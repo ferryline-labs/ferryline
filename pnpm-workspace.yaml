@@ -1,5 +1,6 @@
 packages:
   - "packages/*"
+  - "apps/*"
   - "experiments"
 
 # pnpm >= 10 refuses to run dependency install scripts unless allow-listed. esbuild (via tsup) needs one.

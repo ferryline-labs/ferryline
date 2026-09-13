@@ -8,6 +8,10 @@ coverage/
 !.env.example
 .DS_Store
 
+# Next.js
+.next/
+next-env.d.ts
+
 # Rust / Soroban
 contracts/router/target/
 contracts/router/test_snapshots/
