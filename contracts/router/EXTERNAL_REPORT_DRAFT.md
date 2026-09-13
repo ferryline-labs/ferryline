@@ -1,27 +1,33 @@
 <!--
-DRAFT, ready for review before posting to Stellar's developer Discord / as a GitHub issue or
-discussion. This project's own name/identity is deliberately generic below ("my contract") —
-nothing here should be posted as-is if it would read as speaking for a specific project without
-that being intended.
+DRAFT, genuinely complete as of its third revision — every finding below is real, confirmed, and
+cited to the same standard. Still NOT POSTED anywhere: ready for review before posting to Stellar's
+developer Discord / as a GitHub issue or discussion. This project's own name/identity is
+deliberately generic below ("my contract") — nothing here should be posted as-is if it would read
+as speaking for a specific project without that being intended.
 
-REVISION NOTE (second revision): this combines two independent, real, confirmed findings from the
-same short investigation window, per an explicit decision to post them together rather than as two
-reports minutes apart — Stellar's own maintainers/community would likely rather see the fuller
-picture at once. Both findings started as unconfirmed hypotheses and were confirmed (or, for the
-second, corrected TWICE before landing on the confirmed fix) via real fix-and-retest cycles on
-testnet, not by guessing. Each section is self-contained and can be read independently; they are
-confirmed structurally UNRELATED to each other (different failure phase, different mechanism —
-see each section's own "how this differs from the other finding" note).
+REVISION NOTE (third revision): adds a third, independent finding (Circle CCTP's off-chain
+attestation layer, not Soroban's own authorization framework) discovered separately, about 1.5
+hours after this draft's second revision was last edited. Kept in one report rather than split out,
+for the same reason the first two were combined: each is self-contained and independently
+readable, but a reader deciding whether real testnet/mainnet behavior can diverge from documented
+or expected behavior on Stellar-adjacent infrastructure benefits from seeing all three real
+examples together. Findings 1 and 2 are Soroban-platform-level (`soroban-env-host`'s own
+authorization matching); Finding 3 is a different system entirely (Circle's Iris attestation
+service, off-chain, not part of Soroban or the deployed CCTP contracts' own logic) — confirmed
+structurally UNRELATED to the first two, included here because it's the same class of lesson
+(real, first-party testing found real infrastructure behavior no documentation stated plainly),
+not because the underlying mechanisms are related.
 -->
 
-# Two real Soroban authorization surprises: a live-state-derived auth argument that drifts between simulate and apply, and a same-address `require_auth()` loop that never authorized what it looked like it did
+# Three real surprises building on Stellar: two Soroban authorization footguns, and one Circle CCTP parameter that's silently reinterpreted, not honored or rejected
 
 ## Summary
 
 While building a Soroban router contract that moves funds through a token's `approve` and a
-second cross-contract call, in both single-call and batched-multi-leg forms, two distinct, real,
-confirmed authorization surprises turned up — both invisible to local unit tests, both only
-discoverable through real testnet deployment:
+second cross-contract call (in both single-call and batched-multi-leg forms), and while
+integrating Circle's CCTP v2 for USDC transfers out of Stellar, three distinct, real, confirmed
+surprises turned up — each invisible to local unit tests or published documentation alone, each
+only discoverable through real testnet deployment and a real, funded burn:
 
 1. **A `require_auth`-covered argument computed from live ledger state can silently drift between
    simulate-time signing and real apply-time execution**, causing simulation to succeed completely
@@ -30,10 +36,18 @@ discoverable through real testnet deployment:
    never produced the "N independent per-item authorizations" it looked like it did** — every call
    authorized the exact same thing, and only the LAST one mattered; the rest were redundant, and
    depending on how the loop is written, colliding.
+3. **Requesting CCTP v2's Fast Transfer (`minFinalityThreshold: 1000`) on a burn FROM Stellar is
+   accepted on-chain with no error, but is silently executed at Standard finality (`2000`) instead**
+   — not rejected, not honored, and nothing in the real transaction or its real submission response
+   signals that the requested behavior didn't happen as asked. Confirmed with a real, funded,
+   first-party burn, not inferred from documentation or from observing other operators' transactions.
 
-Neither is a bug in Soroban's authorization framework. Both are real footguns in how a contract
-author can unintentionally construct an authorization-covered value or invocation shape, and (as
-far as we could find) neither is currently documented anywhere obvious.
+Findings 1 and 2 are not bugs in Soroban's authorization framework; they're real footguns in how a
+contract author can unintentionally construct an authorization-covered value or invocation shape.
+Finding 3 is not a bug in Circle's CCTP contracts either — the on-chain call genuinely succeeds; the
+silent reinterpretation happens in Circle's own off-chain attestation service, a system this
+project doesn't control and can't inspect the internals of, only observe the real, external
+behavior of. As far as we could find, none of the three is currently documented anywhere obvious.
 
 ---
 
@@ -201,25 +215,105 @@ wanted anyway, even if the original N-calls code looked like it was doing someth
 
 ---
 
+## Finding 3: requesting CCTP Fast Transfer FROM Stellar is silently re-executed as Standard, not rejected or honored
+
+### The mechanism, confirmed
+
+Circle's CCTP v2 exposes `minFinalityThreshold` on `deposit_for_burn` as a caller-chosen value —
+`1000` for Fast Transfer (attested before source-chain finality), `2000` for Standard (attested
+after). Circle's own published capability table lists Stellar as a source chain with "Standard
+Transfer" supported and "Fast Transfer" marked not applicable, but a table entry is a claim about
+what's _offered_, not proof of what happens when a caller asks for the unsupported value anyway —
+whether the contract call itself would reject `1000` outright, silently ignore it, or accept it and
+have some other layer decide what actually happens was not documented anywhere we could find, and
+is exactly what a real burn is for.
+
+**Confirmed with two real, first-party burns, submitted for real, not inferred from Circle's own
+documentation or from observing other operators' transactions on mainnet:**
+
+- A real `deposit_for_burn` invocation with `min_finality_threshold = 1000`, submitted and
+  confirmed successful on Stellar testnet with no error at any stage — not at simulation, not at
+  apply. Circle's own Iris attestation for this exact burn reports `minFinalityThreshold: "1000"`
+  (what was requested) alongside `finalityThresholdExecuted: "2000"` (what actually happened) in
+  the same message.
+- A second real burn, identical in every other respect, with `min_finality_threshold = 2000`
+  requested: Circle's attestation reports `finalityThresholdExecuted: "2000"` here too — the
+  matching, expected case, run specifically to confirm the first result wasn't some unrelated
+  fluke of that one burn.
+- Both burns' `maxFee`/`feeExecuted` were identical (`"0"`/`"0"`) in both cases, ruling out "the
+  1000 request got silently upgraded because Circle charged a fee it couldn't collect" as an
+  alternative explanation — there's no fee difference between the two outcomes at all.
+
+The real, precise finding: **the Stellar-source `deposit_for_burn` call itself has no concept of
+rejecting an unsupported `min_finality_threshold` value** — it accepts `1000` exactly as readily as
+`2000`, produces an identical-looking successful transaction either way, and the actual decision
+about which finality threshold the transfer is attested and delivered under is made entirely by
+Circle's own off-chain Iris service, invisibly to the chain, the caller, and anyone reading the
+submitted transaction's own real result. A caller who only checks "did my transaction succeed" has
+no way to learn, from the chain alone, that the finality behavior they asked for was silently
+substituted.
+
+### How this differs from Findings 1 and 2
+
+Different system entirely: Findings 1 and 2 are both about Soroban's own on-chain authorization
+matching (`soroban-env-host`), confirmed and fixed inside a contract this project controls and can
+read the source of. Finding 3 involves no authorization logic at all, and the actual
+reinterpretation happens inside Circle's Iris attestation service, off-chain, closed-source from
+this project's own vantage point — we can observe its real, external behavior (what a submitted
+message reports) but not its internal reasoning (why `1000` becomes `2000` rather than being
+rejected). It's included here as the same class of lesson — real, first-party testing surfaced
+real infrastructure behavior that neither a capability table nor a contract interface stated
+plainly — not because the mechanism is related to Findings 1 or 2.
+
+### The lesson
+
+A capability table that marks a value "not applicable" for a given direction is not the same claim
+as "the contract will reject that value if you send it anyway," and a successful on-chain
+transaction is not proof that every parameter inside it was honored as requested — some systems in
+a cross-chain pipeline sit off-chain, and a chain's own success/failure signal only covers what
+that chain's own logic actually checked. Any integration that lets a caller choose
+`minFinalityThreshold` (or an equivalent per-transfer behavioral flag on any similar cross-chain
+protocol) on a burn FROM Stellar should either surface this real, confirmed behavior in its own
+documentation (so a caller asking for Fast Transfer at least knows it will silently become Standard,
+not fail loudly) or refuse the unsupported value client-side before ever submitting, rather than
+letting a caller believe their explicit choice was respected when it wasn't.
+
+---
+
 ## Search performed before writing this up
 
-GitHub (`rs-soroban-env`, `soroban-sdk`/`rs-soroban-sdk`, `stellar-cli`, `soroban-examples`),
-Stellar's developer Discord (via web-search proxies — message history itself isn't indexed),
-Stellar Stack Exchange (partially blocked by a Cloudflare challenge for direct access; indexed
-search returned nothing), and general web search were all checked for both exact error strings and
-the general scenario before writing either section above. Neither finding's exact scenario is
-discussed as a question or bug report anywhere in official Stellar channels. What WAS found and is
-cited above — `rs-soroban-env#795` and the `atomic_multiswap`/`atomic_swap` reference
+For Findings 1 and 2: GitHub (`rs-soroban-env`, `soroban-sdk`/`rs-soroban-sdk`, `stellar-cli`,
+`soroban-examples`), Stellar's developer Discord (via web-search proxies — message history itself
+isn't indexed), Stellar Stack Exchange (partially blocked by a Cloudflare challenge for direct
+access; indexed search returned nothing), and general web search were all checked for both exact
+error strings and the general scenario before writing either section. Neither finding's exact
+scenario is discussed as a question or bug report anywhere in official Stellar channels. What WAS
+found and is cited above — `rs-soroban-env#795` and the `atomic_multiswap`/`atomic_swap` reference
 implementation — is far more valuable than a forum thread would have been, and Finding 2's
 write-up leans on it directly rather than re-deriving the fix from scratch a third time.
 
+For Finding 3: Circle's own published developer documentation (`developers.circle.com/cctp`,
+specifically the supported-chains-and-domains capability table and the CCTP technical guide) was
+read directly and quoted above; it states Stellar's Fast Transfer support as "not applicable" for
+the source-chain direction but does not say what the contract call itself does if a caller sends
+`1000` anyway. General web search and Circle's own developer Discord/forum channels (where
+accessible) were checked for this exact scenario — a caller-side value being silently
+reinterpreted rather than rejected — and nothing describing it was found. This finding rests
+entirely on the two real burns described above, not on any third-party report.
+
 ## Suggestion for the docs/SDK
 
-Both lessons above could be called out explicitly in Stellar's authorization documentation and/or
-the relevant SDK doc comments (`token::Client::approve` for Finding 1; `Address::require_auth`'s own
-doc comment, right where it currently says `require_auth()` is useful "when there is only a single
-Address that needs to authorize the contract invocation and there are no dynamic arguments that
-don't need authorization," for Finding 2 — that phrasing is exactly the boundary a same-address
+The first two lessons could be called out explicitly in Stellar's authorization documentation
+and/or the relevant SDK doc comments (`token::Client::approve` for Finding 1; `Address::require_auth`'s
+own doc comment, right where it currently says `require_auth()` is useful "when there is only a
+single Address that needs to authorize the contract invocation and there are no dynamic arguments
+that don't need authorization," for Finding 2 — that phrasing is exactly the boundary a same-address
 loop crosses without it being obvious that it does). Neither constraint was written down anywhere
 we could find before running into both ourselves; hopefully this write-up saves the next person
 either investigation.
+
+For Finding 3: Circle's own capability table (developers.circle.com/cctp/concepts/supported-chains-and-domains)
+could state explicitly, next to Stellar's "Fast Transfer: N/A" row, what actually happens if a
+caller requests `1000` anyway — accepted-and-silently-reinterpreted is a materially different,
+more surprising outcome for an integrator than either "rejected on-chain" or "rejected by Iris" would
+be, and none of the three is the default assumption a reader would form from "N/A" alone.
