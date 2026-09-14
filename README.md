@@ -116,9 +116,12 @@ is that someone, self-hostable and Dockerised:
   limits must never be confused with each other).
 - Survives a crash mid-flight: a transfer stuck in `submitting` when the process dies is
   reconciled and resumed on the next startup, this is a real, tested code path, not an assumption.
-- Right now this service only exists for the _inbound_ (EVM → Stellar) CCTP direction. Outbound
-  (Stellar → EVM) CCTP delivery has no equivalent automatic relay anywhere, an honest, sourced,
-  currently-open gap, see below.
+- Completes **both directions**: inbound (EVM → Stellar, described above) and outbound
+  (Stellar → EVM), mirroring the same state machine, spend controls, and crash-recovery discipline
+  for the destination chain's `receiveMessage` call instead of Stellar's `mint_and_forward`.
+  Testnet-proven with a real Sepolia transaction, see
+  [packages/relayer/README.md](packages/relayer/README.md)'s own "Outbound (Stellar -> EVM)"
+  section for the real API and env vars. Still not a guaranteed delivery-time SLA, see below.
 
 ### `@ferryline/widget` — a real drop-in UI
 
@@ -192,7 +195,7 @@ flowchart LR
   R --> TM
   OFT --> LZ["LayerZero DVNs + executor"] --> DST["Destination chain"]
   TM --> IRIS["Circle Iris attestation"]
-  IRIS -.->|"no automatic relay — open gap, see below"| DST
+  IRIS -.->|"optional: Ferryline outbound relayer, see below"| DST
   SRC["Source chain"] -->|"USDC in: burn with hook"| IRIS2["Circle Iris attestation"]
   IRIS2 --> RL["Ferryline relayer"] -->|"mint_and_forward + fee-bump"| FWD["CctpForwarder"] --> U["G / C / M recipient"]
   SRC -->|"USDT0 in"| LZ --> OFT --> U
@@ -201,8 +204,9 @@ flowchart LR
 USDT0 inbound is delivered automatically by LayerZero's own executor infrastructure, no relayer
 needed there, though the recipient must already hold a trustline or delivery fails. USDC inbound is
 where Ferryline's own relayer matters: Circle's infrastructure does not forward into Stellar on its
-own. USDC **outbound** (Stellar → EVM) is the one direction with a real, currently-unaddressed gap:
-see the next section.
+own. USDC **outbound** (Stellar → EVM) now has the same kind of automatic completion available,
+via Ferryline's own outbound relayer (testnet-proven, self-hostable) — see the next section for
+what "automatic" does and doesn't guarantee here.
 
 ## Verified facts and honest gaps
 
@@ -219,18 +223,20 @@ matter of discipline, not marketing. Two living documents carry this:
   looked complete until a deliberately reintroduced bug slipped past it undetected, so the check
   itself was strengthened).
 
-**One real, currently open, honestly-disclosed gap worth knowing before you build on this:**
-outbound (Stellar → EVM) CCTP delivery has no automatic relay on testnet _or_ mainnet, confirmed
-directly against Circle's own technical documentation, not inferred from testnet behavior alone.
-`receiveMessage` on the destination chain is permissionless by CCTP's own design, anyone, including
-the sender or recipient themselves, can submit it and pay its small gas cost, but nothing in this
-pipeline (not Circle's own infrastructure, not this project's relayer, which only covers the
-opposite direction) submits it automatically today. This does not put funds at risk (the
-attestation and mint recipient are correct the whole time), but it does mean an outbound transfer
-can sit at "attestation complete, not yet delivered" until someone completes that one call. The
-widget's own UI surfaces this honestly rather than implying an ETA-bound "just wait" status; see
-`packages/widget/e2e/submit-receive-message.mjs` for a real, working example of completing delivery
-manually, and the router/technical-doc risk register for the full write-up and severity assessment.
+**Real, testnet-proven, but not a guaranteed SLA — worth knowing before you build on this:**
+Circle's own CCTP protocol still has no automatic relay for outbound (Stellar → EVM) delivery, on
+testnet or mainnet, confirmed directly against Circle's own technical documentation — that has not
+changed and is not something this project controls. What HAS changed: Ferryline now ships a real,
+self-hostable outbound relayer (`packages/relayer/`) that the widget and SDK register with
+automatically once a burn's transaction hash is known, closing the automatic-relay gap as the
+default path. It is still not a guaranteed delivery-time SLA: `receiveMessage` on the destination
+chain remains permissionless by CCTP's own design (Circle's choice, not this project's), so anyone,
+including the sender or recipient, can still complete delivery manually at any time if the
+configured relayer is unavailable, misconfigured, or its own daily spend ceiling is exhausted — see
+`packages/widget/e2e/submit-receive-message.mjs` for a real, working example of doing so, and
+`packages/relayer/OUTBOUND_THREAT_MODEL.md` for the full design/risk write-up. This does not put
+funds at risk either way (the attestation and mint recipient are correct throughout); it's a
+completeness/UX property, not a safety one.
 
 Two further, narrower questions remain genuinely open and are recorded as such rather than assumed:
 whether inbound USDT0 can be delivered to a Stellar smart-account (C-address) recipient, and what
@@ -307,9 +313,8 @@ moved) with `pnpm --filter @ferryline/sdk record:usdt0-fixtures` and
 
 Issues are scoped from this project's own real, dated findings, not invented busywork: every issue
 we open links to the exact experiment report, test, or code location that surfaced it. If you're
-looking for where to start, the two currently-BLOCKED USDT0 experiments above and the outbound-CCTP
-relay gap described in [Verified facts and honest gaps](#verified-facts-and-honest-gaps) are real,
-open, and ready for a contributor with the right funded account or the appetite to design a fix.
+looking for where to start, the two currently-BLOCKED USDT0 experiments above are real, open, and
+ready for a contributor with the right funded mainnet account to actually run them.
 
 ## License
 

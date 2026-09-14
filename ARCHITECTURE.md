@@ -73,7 +73,7 @@ flowchart TB
 
   USDT0 <-->|"LayerZero DVNs + executor"| EVM1["EVM chains"]
   CCTP -->|"burn"| Iris["Circle Iris<br/>attestation service"]
-  Iris -->|"outbound: no automatic relay<br/>(open gap)"| EVM2["EVM chains"]
+  Iris -.->|"outbound: optional Ferryline relayer<br/>(self-hostable, not a guaranteed SLA)"| EVM2["EVM chains"]
   EVM2 -->|"burn with hook"| Iris2["Circle Iris"]
   Iris2 --> Relayer["ferryline-relayer<br/>Fastify + Postgres, self-hosted"]
   Relayer -->|"mint_and_forward + fee-bump"| Forwarder["CctpForwarder"]
@@ -193,8 +193,8 @@ dispatch by the quote's own `rail` field.
 - **`track()`'s real delivery-confirmation logic differs by direction.** Outbound, it polls the
   _destination_ EVM chain's `MessageTransmitterV2.usedNonces(nonce)`. Inbound, it polls Stellar's
   own `MessageTransmitter.is_nonce_used`. Neither path submits the completing `receiveMessage`/
-  `mint_and_forward` call itself, that's a structural gap for outbound (see
-  [Security model](#security-model)) and the relayer's own job for inbound.
+  `mint_and_forward` call itself — that's the relayer's own job, for **both** directions now (see
+  [Security model](#security-model) for what "automatic" does and doesn't guarantee for outbound).
 
 Both adapters are tested against real, recorded mainnet responses (`__fixtures__/` under each
 rail's own directory, regenerable read-only via `pnpm --filter @ferryline/sdk record:*-fixtures`),
@@ -203,12 +203,15 @@ verification work (see [Testing strategy](#testing-strategy)).
 
 ### `ferryline-relayer`
 
-Path: [packages/relayer](packages/relayer) · 98 unit/component tests + 18 live-database
+Path: [packages/relayer](packages/relayer) · 185 unit/component tests + 37 live-database
 integration tests · Fastify + PostgreSQL, Dockerised, self-hostable.
 
-Completes **inbound (EVM → Stellar) CCTP transfers only**. It exists because Circle's own
-infrastructure does not forward the completing mint into Stellar; someone has to watch for
-attestation and submit it.
+Completes CCTP transfers in **both directions**: inbound (EVM → Stellar) and outbound
+(Stellar → EVM, testnet-proven with a real Sepolia transaction). It exists because Circle's own
+infrastructure does not forward CCTP's completing message on either end automatically; someone has
+to watch for attestation and submit it. Outbound is opt-in per deployment
+(`FERRYLINE_OUTBOUND_ENABLED=true`) and, like inbound, not a guaranteed delivery-time SLA — see
+[Security model](#security-model).
 
 **Real state machine**, one row per transfer, in Postgres:
 
@@ -320,9 +323,12 @@ invariant-by-invariant, mutation-tested security analysis.
 
 ## Data flow: outbound Stellar → EVM
 
-The direction with no relayer involvement at all, per the roadmap's own architecture: it goes
-straight from a signed Stellar transaction to the rail contracts and Circle/LayerZero's own
-infrastructure.
+USDT0 goes straight from a signed Stellar transaction to LayerZero's own executor infrastructure —
+no relayer involvement, as before. USDC/CCTP now optionally routes through Ferryline's own outbound
+relayer for automatic completion, registered by the SDK itself once the burn's final step confirms
+(see `Ferryline.registerOutboundTransfer`/`isFinalStep` in `packages/sdk/src/index.ts`) — an
+integrator with no relayer configured still gets the exact same manual-completion path this section
+described before this capability existed.
 
 ```mermaid
 sequenceDiagram
@@ -332,6 +338,7 @@ sequenceDiagram
   participant Wallet as Real wallet (Freighter, etc.)
   participant Stellar
   participant Attest as Iris / LayerZero Scan
+  participant Relayer as Ferryline outbound relayer (optional)
   participant EVM as Destination chain
 
   User->>Widget: set .request (asset, from, to, amount)
@@ -347,15 +354,19 @@ sequenceDiagram
   Widget->>Stellar: submit
   Stellar-->>Widget: real tx hash
   Widget->>SDK: markSubmitted(transferId, sourceTxHash)
+  Note over Widget,SDK: on the FINAL step only (isFinalStep) —<br/>see the doc comment on why not every step
+  Widget->>SDK: registerOutboundTransfer(transferId)
+  SDK->>Relayer: POST /outbound-transfers (skipped silently if unconfigured)
   loop track()
     SDK->>Stellar: getTransaction(sourceTxHash)
     SDK->>Attest: poll for attestation / GUID status
   end
-  Attest->>EVM: (CCTP: permissionless receiveMessage, no automatic relay today)
+  Attest->>EVM: (CCTP: Ferryline relayer submits receiveMessage if configured,<br/>else permissionless — anyone can still complete it manually)
   Attest->>EVM: (USDT0: LayerZero's own executor delivers automatically)
 ```
 
-The CCTP branch's `receiveMessage` step is the one real, open gap, see
+The CCTP branch's `receiveMessage` step is no longer a pure gap when a relayer is configured, but
+it is still not a guaranteed delivery-time SLA even then — see
 [Security model](#security-model).
 
 ## Data flow: inbound EVM → Stellar
@@ -416,17 +427,24 @@ work loop resumes.
 | The relayer's spend cap and rate limit are checked against a verified fact, never a caller's claim                                 | amount/recipient are `null` until the `attested` transition writes them from the parsed on-chain message          | relayer's `work/attest.test.ts`                                                              |
 | The widget can never call a wallet's `signTransaction` without first rendering a decoded preview                                   | `confirmPreviewAndSign`'s own parameter type only accepts an already-preview-phase value                          | widget's `index.test.ts`, "preview cannot be bypassed"                                       |
 
-**One real, currently open, honestly-disclosed gap:** outbound (Stellar → EVM) CCTP delivery has no
-automatic relay, on testnet or mainnet, confirmed directly against Circle's own technical
-documentation (not inferred from testnet behavior). `receiveMessage` on the destination chain is
-permissionless by CCTP's own design, anyone (including the sender or recipient) can submit it and
-pay its small gas cost, but nothing in this pipeline does so automatically today. This is not a
-fund-loss risk, the attestation and mint recipient are correct throughout, but it does mean an
-outbound transfer can sit at "attestation complete, awaiting delivery" indefinitely unless someone
-completes that one call. See `packages/widget/e2e/submit-receive-message.mjs` for a real, working
-example of doing so manually, and the risk-register entry in `technical-doc.md`'s own threat-model
-table for the full severity assessment. Building a dedicated outbound relayer (mirroring the
-existing inbound one) is a real, scoped candidate for future work, not started.
+**The automatic-relay gap is closed; the "not a guaranteed SLA" honesty is not, and never will be —
+those are different claims:** Ferryline now ships a real, testnet-proven, self-hostable outbound
+relayer (`packages/relayer/`, opt-in via `FERRYLINE_OUTBOUND_ENABLED=true`) that the widget/SDK
+register outbound (Stellar → EVM) CCTP transfers with automatically once the burn's final step
+confirms (see `Ferryline.registerOutboundTransfer` in `packages/sdk/src/index.ts`). Circle's own
+CCTP protocol still has no automatic relay of its own, on testnet or mainnet — that fact hasn't
+changed and isn't something this project controls. `receiveMessage` on the destination chain
+remains permissionless by CCTP's own design: anyone (including the sender or recipient) can still
+submit it and pay its small gas cost if the configured relayer is unavailable, misconfigured, or
+its own daily spend ceiling is exhausted for the day. This was never a fund-loss risk (the
+attestation and mint recipient are correct throughout, with or without a relayer); it's a
+completeness/UX property. See `packages/widget/e2e/submit-receive-message.mjs` for a real, working
+example of manual completion, `packages/relayer/OUTBOUND_THREAT_MODEL.md` for the full design/risk
+write-up, and the real Sepolia transaction recorded in
+`packages/core/verified/experiments/` for the testnet proof. **This is not the same claim as
+"production-ready on mainnet"** — v1 supports exactly one destination chain per running instance,
+and no SDF Audit Bank engagement has started for this or any other component; see the relayer's own
+`OUTBOUND_SCOPE.md` for the full, current scope boundary.
 
 ## What's verified, what's assumed, what's open
 

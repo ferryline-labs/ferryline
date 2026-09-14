@@ -98,17 +98,6 @@ behind it. The landing page's own "Open source" section lists these too, kept in
 if one of these resolves, it should be updated or removed in both places, the same way this
 project's verified-facts files get a dated revision entry rather than a silent edit.
 
-### Outbound CCTP delivery has no relayer (new service, real scope, not started)
-
-Stellar → EVM CCTP transfers need someone to submit the completing `receiveMessage` call on the
-destination chain, confirmed directly against Circle's own documentation: an API consumer must
-submit the attested message themselves, Circle's infrastructure doesn't do it automatically, on
-testnet or mainnet. Nothing in this repo does this automatically today (`packages/relayer/` is
-inbound-only, EVM → Stellar). This is explicitly out of scope for the phase that discovered it, not
-forgotten, see the risk register in [technical-doc.md](technical-doc.md) and
-[ARCHITECTURE.md](ARCHITECTURE.md)'s security-model section for the full write-up. Building a
-dedicated outbound relayer, mirroring the existing inbound one, is real, scoped, future work.
-
 ### Inbound USDT0 to a Stellar smart-account (C-address) recipient
 
 Whether LayerZero's OFT can deliver USDT0 to a Soroban smart-account recipient at all is genuinely

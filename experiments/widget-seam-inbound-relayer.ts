@@ -7,11 +7,16 @@
  *   Stellar mint_and_forward).
  *
  * This is the INBOUND half of the widget's real integration surface (EVM -> Stellar), proved
- * SEPARATELY from the outbound seam (see `widget-seam-outbound-cctp.ts`) because the relayer is
- * architecturally inbound-only — confirmed directly: `POST /transfers`'s own schema types
- * `sourceTxHash` as an EVM tx hash (packages/relayer/src/http/schemas.ts), the relayer's own
- * README says "Completes CCTP-to-Stellar transfers", and the roadmap's architecture diagram routes
- * outbound sends straight from the SDK to Stellar's CCTP contracts with no relayer in that path.
+ * SEPARATELY from the outbound seam (see `widget-seam-outbound-cctp.ts`) because, AT THE TIME THIS
+ * SCRIPT WAS WRITTEN, the relayer was architecturally inbound-only — confirmed directly:
+ * `POST /transfers`'s own schema types `sourceTxHash` as an EVM tx hash
+ * (packages/relayer/src/http/schemas.ts), the relayer's own README said "Completes CCTP-to-Stellar
+ * transfers", and the roadmap's architecture diagram routed outbound sends straight from the SDK
+ * to Stellar's CCTP contracts with no relayer in that path. A later phase added a real outbound
+ * relayer direction to this same package (`POST /outbound-transfers`) and SDK/widget wiring to
+ * register with it automatically — see `packages/relayer/README.md` and
+ * `packages/sdk/src/index.ts`'s `registerOutboundTransfer` for the current, real state; this
+ * script's own historical framing above is left as written for the moment it describes.
  *
  * Needs, all real, all already arranged before this script runs:
  * - A funded Sepolia EVM account (0.001 ETH gas + 20 USDC, both from real testnet faucets — no
