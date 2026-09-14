@@ -6,12 +6,7 @@ describe("baseOptions", () => {
   it("names the site and links out to the real GitHub repo", () => {
     const options = baseOptions();
     expect(options.nav?.title).toBe("Ferryline");
-    expect(options.links).toContainEqual(
-      expect.objectContaining({
-        url: "https://github.com/ferryline-labs/ferryline",
-        external: true,
-      }),
-    );
+    expect(options.githubUrl).toBe("https://github.com/ferryline-labs/ferryline");
   });
 
   it("enables the real light/dark/system theme switcher, not the light/dark-only default", () => {
