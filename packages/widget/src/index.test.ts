@@ -156,7 +156,7 @@ function makeElement(): { el: FerrylineWidget; adapter: FakeAdapter; wallet: Fak
       // fake never actually calls a relayer; it exists so the widget's own real call to it
       // (unconditional on the final step, per the real bug fix) doesn't throw "not a function" and
       // silently abort the tracking flow the way it did before this fixture was updated.
-      registerOutboundTransfer: () => Promise.resolve(),
+      registerOutboundTransfer: () => Promise.resolve({ registered: true }),
       track: (id: TransferId, signal?: AbortSignal) => adapter.track(id, signal),
       prepareStep: () => {
         throw new Error("no deferred steps in this fixture");
@@ -476,6 +476,72 @@ describe("ferryline-widget — outbound CCTP delivery caveat (STEP 3 finding)", 
     },
   );
 
+  it(
+    "shows an HONEST FAILURE caveat when relayer registration genuinely fails (the real 401 " +
+      "regression this test reproduces: a live, misconfigured relayer API key used to still " +
+      "render the SUCCESS text)",
+    async () => {
+      const { el, adapter } = makeElement();
+      el.setAttribute("relayer-url", "http://localhost:8080");
+      adapter.statuses = [
+        { transferId: "" as TransferId, stage: "verified", updatedAt: Date.now() },
+      ];
+      // Real reproduction of the exact scenario: registerOutboundTransfer was actually called (a
+      // relayer IS configured) but the attempt genuinely failed — same shape a real 401 from an
+      // invalid/revoked API key produces (see @ferryline/sdk's own registerOutboundTransfer, gate
+      // 3: registered: false with a real error message, never thrown).
+      const client: WidgetClient = {
+        ferryline: {
+          config: { network: "testnet", rpcUrl: "https://soroban-testnet.stellar.org" },
+          quote: (r: TransferRequest) => adapter.quote(r),
+          build: (q: Quote) => adapter.build(q),
+          markSubmitted: () => Promise.resolve(),
+          registerOutboundTransfer: () =>
+            Promise.resolve({
+              registered: false,
+              error: "relayer registration failed: invalid or revoked API key",
+            }),
+          track: (id: TransferId, signal?: AbortSignal) => adapter.track(id, signal),
+          prepareStep: () => {
+            throw new Error("no deferred steps in this fixture");
+          },
+        } as never,
+        availableRails: ["usdc-cctp"],
+        networkPassphrase: NETWORK_PASSPHRASE,
+        submitStellarTransaction: () => Promise.resolve("fake-source-tx-hash"),
+      };
+      el.testClientOverride = client;
+      el.request = REQUEST;
+      await vi.waitFor(() =>
+        expect(el.shadowRoot?.querySelector('[part="build-button"]')).not.toBeNull(),
+      );
+      el.shadowRoot?.querySelector<HTMLButtonElement>('[part="build-button"]')?.click();
+      await vi.waitFor(() =>
+        expect(el.shadowRoot?.querySelector('[part="preview"]')).not.toBeNull(),
+      );
+      el.shadowRoot?.querySelector<HTMLButtonElement>('[data-wallet-module="freighter"]')?.click();
+      await vi.waitFor(() =>
+        expect(
+          el.shadowRoot?.querySelector('[part="confirm-button"]')?.hasAttribute("disabled"),
+        ).toBe(false),
+      );
+      el.shadowRoot?.querySelector<HTMLButtonElement>('[part="confirm-button"]')?.click();
+
+      await vi.waitFor(() => {
+        expect(el.shadowRoot?.querySelector('[part="delivery-caveat"]')).not.toBeNull();
+      });
+      const caveatText =
+        el.shadowRoot?.querySelector('[part="delivery-caveat"]')?.textContent ?? "";
+      // The core assertion: the FAILURE message, never the success claim, for a registration that
+      // genuinely failed.
+      expect(caveatText).toContain("registration");
+      expect(caveatText).toContain("failed");
+      expect(caveatText).toContain("NOT currently registered");
+      expect(caveatText).not.toContain("has been registered with the configured relayer");
+      el.remove();
+    },
+  );
+
   it("does NOT show the caveat once actually delivered — it's specific to the 'verified' waiting stage", async () => {
     const { el, adapter } = makeElement();
     adapter.statuses = [
@@ -742,7 +808,7 @@ describe("ferryline-widget — deliberate delay before building the step right a
         quote: (r: TransferRequest) => adapter.quote(r),
         build: () => Promise.resolve(built),
         markSubmitted: () => Promise.resolve(),
-        registerOutboundTransfer: () => Promise.resolve(),
+        registerOutboundTransfer: () => Promise.resolve({ registered: true }),
         track: (id: TransferId, signal?: AbortSignal) => adapter.track(id, signal),
         prepareStep: () => {
           prepareStepCalled = true;
@@ -812,7 +878,7 @@ describe("ferryline-widget — deliberate delay before building the step right a
         quote: (r: TransferRequest) => adapter.quote(r),
         build: (q: Quote) => adapter.build(q),
         markSubmitted: () => Promise.resolve(),
-        registerOutboundTransfer: () => Promise.resolve(),
+        registerOutboundTransfer: () => Promise.resolve({ registered: true }),
         track: (id: TransferId, signal?: AbortSignal) => adapter.track(id, signal),
         prepareStep: () => {
           prepareStepCalled = true;

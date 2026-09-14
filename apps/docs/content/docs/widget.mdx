@@ -156,9 +156,14 @@ means no registration attempt, not an error. With a relayer configured, the tran
 completes delivery on its own — see [Known limitations](#known-limitations) below for the honest
 edge of that claim.
 
-The widget's own delivery-status copy reflects both cases. It renders one of two real strings
-depending on whether `relayer-url` is set, from its own `outboundDeliveryCaveat(relayerConfigured)`
-helper — not one static "just wait" message regardless of configuration.
+`registerOutboundTransfer()` returns a real `{ registered: boolean, error?: string }` result (not
+`void`) specifically so the widget can tell a genuine registration success apart from a genuine
+failure — a real, live 401 from a misconfigured relayer API key used to still render success text,
+before this existed. The widget's own delivery-status copy reflects all three real cases, from its
+own `outboundDeliveryCaveat(relayerConfigured, registrationResult)` helper: no relayer configured at
+all ("not automatic for this rail"); relayer configured and registration genuinely succeeded ("has
+been registered"); relayer configured but registration genuinely failed (or hasn't resolved yet) — a
+distinct, honest "NOT currently registered" message, never the success claim in that case.
 
 ## Theming
 

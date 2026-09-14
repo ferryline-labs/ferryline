@@ -23,6 +23,7 @@ import type {
   FerrylineNetwork,
   Quote,
   RailId,
+  RegisterOutboundTransferResult,
   TransferRequest,
   TransferStage,
 } from "@ferryline/sdk";
@@ -92,23 +93,54 @@ const RAIL_LABELS: Readonly<Record<RailId, string>> = {
  * ONLY path. `track()`'s "verified" stage still only means the attestation is real and complete —
  * it does NOT mean delivery is imminent or guaranteed, with or without a relayer configured.
  *
- * The copy below is two variants, chosen by whether THIS widget instance has a relayer configured
- * at all (relayerUrl set) — an integrator running the widget with no relayer configured (a real,
- * still-fully-supported mode, see FerrylineConfig.relayerUrl's own doc comment) must not be told
- * "a relayer is handling this" when none is registered on their behalf.
+ * The copy below is now THREE variants (updated from an earlier two-variant version that took just
+ * `relayerConfigured: boolean` and showed the "has been registered" success text unconditionally
+ * whenever a relayer was configured — even when the real `registerOutboundTransfer` call had just
+ * genuinely failed; confirmed live: a real 401 from a misconfigured relayer API key still produced
+ * that exact success text, an honest false-positive claim). `registerOutboundTransfer` now returns a
+ * real {@link RegisterOutboundTransferResult} instead of `void` specifically so this function can
+ * tell the difference — see that type's own doc comment in @ferryline/sdk.
+ *
+ * `relayerConfigured` (a stable, always-known fact — whether a `relayer-url` attribute is set at
+ * all) alone decides variant 1, "not automatic for this rail" (same as before — an integrator
+ * running the widget with no relayer configured, a real, still-fully-supported mode, must not be
+ * told "a relayer is handling this" when none is registered on their behalf). When a relayer IS
+ * configured, `registrationResult` decides between the other two: `registered: true` for variant 2,
+ * the real, confirmed success text (unchanged); anything else for variant 3, the new, honest
+ * failure/uncertain wording — covering both a genuine failure (`error` set) and the brief, real gap
+ * where `registered` is still `undefined` because the registration attempt one line earlier in
+ * `afterStepSubmitted` has not resolved by this particular render yet ("verified" can already be
+ * showing while that await is still in flight) — deliberately never the false "has been registered"
+ * claim during that gap either.
  */
-function outboundDeliveryCaveat(relayerConfigured: boolean): string {
-  return relayerConfigured
-    ? "Attestation complete. This transfer has been registered with the configured relayer for " +
-        "automatic delivery on the destination chain — but that is not a guaranteed delivery-time " +
-        "SLA: receiveMessage remains permissionless, so if the relayer is unavailable or its daily " +
-        "spend limit is reached, anyone (you, the recipient, or another relayer) can still submit " +
-        "the attested message on-chain and pay its gas. This is normal, expected behavior, not a " +
-        "sign of an error."
-    : "Attestation complete. Delivery on the destination chain is not automatic for this rail — it " +
-        "requires someone (you, the recipient, or an integrator's own relayer) to submit the " +
-        "attested message on-chain and pay its gas. This can be done by anyone at any time; it is " +
-        "not a sign of an error, but it also will not simply arrive on its own.";
+function outboundDeliveryCaveat(
+  relayerConfigured: boolean,
+  registrationResult: RegisterOutboundTransferResult | undefined,
+): string {
+  if (!relayerConfigured) {
+    return (
+      "Attestation complete. Delivery on the destination chain is not automatic for this rail — it " +
+      "requires someone (you, the recipient, or an integrator's own relayer) to submit the " +
+      "attested message on-chain and pay its gas. This can be done by anyone at any time; it is " +
+      "not a sign of an error, but it also will not simply arrive on its own."
+    );
+  }
+  if (registrationResult?.registered === true) {
+    return (
+      "Attestation complete. This transfer has been registered with the configured relayer for " +
+      "automatic delivery on the destination chain — but that is not a guaranteed delivery-time " +
+      "SLA: receiveMessage remains permissionless, so if the relayer is unavailable or its daily " +
+      "spend limit is reached, anyone (you, the recipient, or another relayer) can still submit " +
+      "the attested message on-chain and pay its gas. This is normal, expected behavior, not a " +
+      "sign of an error."
+    );
+  }
+  return (
+    "Attestation complete, but automatic relay registration with the configured relayer failed, so " +
+    "this transfer is NOT currently registered for automatic delivery. This transfer may need to be " +
+    "completed manually: receiveMessage remains permissionless, so anyone (you, the recipient, or " +
+    "another relayer) can still submit the attested message on-chain and pay its gas."
+  );
 }
 
 /** True only for an outbound (Stellar -> EVM) CCTP quote — the specific case the caveat above applies to. */
@@ -184,6 +216,11 @@ export class FerrylineWidget extends HTMLElement {
   #inboundStatus:
     { readonly status: string; readonly destinationTxHash?: string | null } | undefined;
   #walletError: string | undefined;
+  /** Real result of the one, final-step registerOutboundTransfer call for the CURRENTLY rendered
+   *  transfer — see outboundDeliveryCaveat's own doc comment for why this exists (a real, live 401
+   *  used to render as if registration had succeeded). Set once, right after that call resolves, in
+   *  afterStepSubmitted; read by render()'s own "verified" case below. */
+  #outboundRegistrationResult: RegisterOutboundTransferResult | undefined;
 
   /**
    * Test-only injection seams. Component tests set these to a fixture-backed `WidgetClient` /
@@ -485,14 +522,24 @@ export class FerrylineWidget extends HTMLElement {
     // including an outbound transfer's approve step before its burn) sent the WRONG tx hash first
     // and caused the correct, later registration to be rejected as a duplicate by the relayer's own
     // transferId primary key — see @ferryline/sdk's registerOutboundTransfer/isFinalStep doc
-    // comments for the full story. Fire-and-forget (never awaited into the caller's own flow
-    // beyond this): registerOutboundTransfer itself never throws and gates itself off entirely for
-    // inbound/non-CCTP transfers and when no relayer is configured — see its own doc comment.
+    // comments for the full story. registerOutboundTransfer itself never throws and gates itself
+    // off entirely for inbound/non-CCTP transfers and when no relayer is configured — see its own
+    // doc comment. It DOES, though, now return its real outcome (see RegisterOutboundTransferResult
+    // in @ferryline/sdk) instead of void — captured below so render()'s own "verified" case can show
+    // an honest message instead of assuming success (a real, live 401 from a misconfigured relayer
+    // API key used to render as "registered with the configured relayer" regardless).
     //
     // Registration itself is NOT skipped for a stale generation (an abandoned transfer may already
     // be genuinely submitted on-chain and still deserves real relayer registration/tracking even if
     // the widget's own UI has moved on) — only this instance's OWN rendered phase is guarded below.
-    await this.client().ferryline.registerOutboundTransfer(built.transferId);
+    const registrationResult = await this.client().ferryline.registerOutboundTransfer(
+      built.transferId,
+    );
+    if (generation === this.#requestGeneration) {
+      // Same staleness guard as setPhaseIfCurrent's own — a stale generation's real registration
+      // result must not overwrite the field render() reads for whatever transfer is CURRENT now.
+      this.#outboundRegistrationResult = registrationResult;
+    }
     // Seed a "tracking" phase immediately, before the first real status arrives — track()'s first
     // yield can lag by however long the RPC/Horizon round-trip takes, and without this the UI would
     // otherwise show nothing between "wallet accepted the signature" and that first real update.
@@ -658,7 +705,7 @@ export class FerrylineWidget extends HTMLElement {
           <p part="status">${STAGE_LABELS[phase.status.stage]}</p>
           ${
             phase.status.stage === "verified" && isOutboundCctp(phase.quote)
-              ? `<div part="delivery-caveat" class="caveat">${outboundDeliveryCaveat(Boolean(this.relayerUrl))}</div>`
+              ? `<div part="delivery-caveat" class="caveat">${outboundDeliveryCaveat(Boolean(this.relayerUrl), this.#outboundRegistrationResult)}</div>`
               : ""
           }
           ${phase.status.sourceTxHash ? `<div part="source-tx" class="tx-hash">Source tx: ${escapeHtml(phase.status.sourceTxHash)}</div>` : ""}`;
