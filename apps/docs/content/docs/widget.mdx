@@ -1,0 +1,318 @@
+---
+title: Widget
+description: The framework-agnostic <ferryline-widget> custom element — a real integration example, theming, and its real limitations.
+---
+
+`@ferryline/widget` ships one thing: a real `<ferryline-widget>` custom element that wraps
+`@ferryline/sdk`'s quote → build → sign → track lifecycle (see [Core Concepts](/docs/core-concepts))
+in a ready-made UI. It's a plain Web Component — `FerrylineWidget extends HTMLElement`, defined via
+`defineFerrylineWidget()` — with no framework runtime underneath it. There's no `.tsx` file
+anywhere in the package and no `react` dependency in its `package.json`; it works the same way
+inside a React app, a Vue app, or a static HTML page with no framework at all.
+
+There's currently no React wrapper around it. The package's own scope note is explicit that this
+is a decision for this phase, not an oversight:
+
+> This package intentionally does NOT include a React wrapper, and testnet mode intentionally does
+> NOT offer USDT0 (see above for why the latter is structural, not a policy choice). Both are
+> explicit decisions for this phase, not oversights — see the repo's phase reports if you're
+> deciding whether to add either downstream.
+
+If you need the widget inside a React tree today, render the custom element directly
+(`<ferryline-widget>` works fine in JSX) and set `.request` imperatively via a ref, the same way
+any other custom element is used from React without a dedicated wrapper.
+
+## Install and register
+
+```bash
+npm install @ferryline/widget
+```
+
+```ts
+import { defineFerrylineWidget } from "@ferryline/widget";
+defineFerrylineWidget(); // registers <ferryline-widget>; safe to call more than once
+```
+
+## A real integration example
+
+Declarative attributes handle network configuration; the transfer itself is set imperatively as a
+property, because a full `TransferRequest` (see [SDK Reference](/docs/sdk-reference)) doesn't
+serialize cleanly to a single HTML attribute. This is the package's own README example, verbatim:
+
+```html
+<ferryline-widget network="testnet"></ferryline-widget>
+<script type="module">
+  const widget = document.querySelector("ferryline-widget");
+  widget.request = {
+    asset: "USDC",
+    from: { chain: "stellar", address: "G..." },
+    to: { chain: "ethereum-sepolia", address: "0x..." },
+    amount: "10",
+    parameters: { maxFee: "0", minFinalityThreshold: 2000 },
+  };
+</script>
+```
+
+Setting `.request` kicks off a real `quote()` call immediately.
+
+For a more complete picture of a host page driving this, `packages/widget/e2e/harness.ts` is the
+real script this repo's own Playwright end-to-end run uses — it defines the element, then sets the
+exact same `TransferRequest` shape against a real testnet outbound CCTP send (Stellar →
+Ethereum Sepolia):
+
+```ts
+import { defineFerrylineWidget, type FerrylineWidget } from "../src/index.js";
+import type { TransferRequest } from "@ferryline/sdk";
+
+defineFerrylineWidget();
+
+const SENDER = "GBBA3HN2PNOAJGR6R5VY34SQFDFTZFQIGDPYATJB34UXXFUHVR4KZRAZ";
+const RECIPIENT_EVM = "0x11598bA8E624b7df301FC3d2C71165A076b7480e";
+
+const widget = document.querySelector<FerrylineWidget>("#widget")!;
+
+const request: TransferRequest = {
+  asset: "USDC",
+  from: { chain: "stellar", address: SENDER },
+  to: { chain: "ethereum-sepolia", address: RECIPIENT_EVM },
+  amount: "0.5",
+  parameters: { maxFee: "0", minFinalityThreshold: 2000 },
+};
+
+window.__ferrylineTestHooks = {
+  setRequest(): void {
+    widget.request = request;
+  },
+};
+```
+
+Its own doc comment is explicit that this isn't a synthetic fixture: "No mocks, no test doubles —
+the only thing this file adds beyond what a real integrator's page would do is exposing a couple of
+read hooks (`window.__ferrylineTestHooks`)" for the Playwright script to read rendered state.
+
+## Attributes
+
+| Attribute         | Values                       | Default         | Notes                                                                                                                                                                                                   |
+| ----------------- | ---------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `network`         | `testnet` \| `mainnet`       | `testnet`       | Changing it tears down and rebuilds the widget's internal client/wallet session.                                                                                                                        |
+| `rpc-url`         | a Soroban RPC URL            | network default | Override if you run your own RPC node.                                                                                                                                                                  |
+| `relayer-url`     | a Ferryline relayer base URL | —               | Used for **both** directions: required for inbound (EVM → Stellar) CCTP tracking (see `registerInboundTransfer` below), and enables automatic outbound (Stellar → EVM) registration if set (see below). |
+| `relayer-api-key` | a bearer token               | —               | Sent as `Authorization: Bearer <key>` to the relayer.                                                                                                                                                   |
+
+In `network="testnet"` mode, only the `usdc-cctp` rail is ever registered — the widget's internal
+client only constructs a `UsdcCctpAdapter` in testnet mode, so there's no code path where a testnet
+widget instance even holds a USDT0 adapter to route to (see
+[Core Concepts](/docs/core-concepts#the-two-rails) for why USDT0 has no Stellar testnet deployment
+at all). In `network="mainnet"` mode, both rails are registered.
+
+## Registering an inbound transfer
+
+Inbound EVM → Stellar CCTP transfers are different from outbound: the widget doesn't drive the
+source-chain wallet (that's whatever wallet the user already used on the EVM side), so it needs a
+[self-hosted relayer](/docs/relayer) to watch that chain and complete delivery on Stellar. Once you
+have a real EVM burn transaction hash, call:
+
+```ts
+await widget.registerInboundTransfer(transferId, "ethereum-sepolia", sourceTxHash);
+```
+
+This calls the configured relayer's real `POST /transfers`, then polls `GET /transfers/:id`,
+rendering live status inline (the `inbound-status` part below). If no `relayer-url` attribute or
+property is set, it throws immediately rather than silently doing nothing — the exact current
+source (it reads the relayer config through the widget's own SDK client, not a direct attribute
+getter, since the outbound flow below needed the same config value and this was the real migration
+that let both directions share it):
+
+```ts
+async registerInboundTransfer(
+  transferId: string,
+  sourceChain: ChainSlug,
+  sourceTxHash: string,
+): Promise<void> {
+  const relayerUrl = this.client().ferryline.config.relayerUrl;
+  if (!relayerUrl) {
+    throw new Error("registerInboundTransfer requires a relayer-url attribute or property");
+  }
+  // ...
+}
+```
+
+## Outbound registration (automatic)
+
+Unlike inbound, you don't call anything for outbound. Once the final step of an outbound
+(Stellar → EVM) transfer is signed, submitted, and its hash recorded, the widget automatically
+calls `@ferryline/sdk`'s `Ferryline.registerOutboundTransfer()` on your behalf — real source, from
+the widget's own `afterStepSubmitted`:
+
+```ts
+if (isFinalStep(built, stepIndex)) {
+  await this.client().ferryline.registerOutboundTransfer(built.transferId);
+}
+```
+
+This is gated on `relayer-url` being configured, silently, the same way `registerOutboundTransfer`
+itself is (see [SDK Reference](/docs/sdk-reference#registeroutboundtransfer)): no relayer configured
+means no registration attempt, not an error. With a relayer configured, the transfer now normally
+completes delivery on its own — see [Known limitations](#known-limitations) below for the honest
+edge of that claim.
+
+The widget's own delivery-status copy reflects both cases. It renders one of two real strings
+depending on whether `relayer-url` is set, from its own `outboundDeliveryCaveat(relayerConfigured)`
+helper — not one static "just wait" message regardless of configuration.
+
+## Theming
+
+The widget's styling mechanism changed since an earlier version of this page: it's now real
+Tailwind v4, compiled at build time, not hand-authored CSS custom properties for every visual
+token. Get this right before touching your own theme, because the two mechanisms have genuinely
+different override surfaces.
+
+### The real current mechanism
+
+`packages/widget/src/style.css` is a real Tailwind source file (`@import "tailwindcss" source(none)`
+
+- `@config "../tailwind.config.ts"`), compiled by `packages/widget/scripts/build-style.mjs` into a
+  static string, `GENERATED_STYLE`, written to `src/generated-style.ts` and injected into the shadow
+  root's `<style>` tag at render time — `build:style` runs before `tsup` in the package's own `build`
+  script, and fails the build outright on any Tailwind warning. `tailwind.config.ts` imports its
+  colors/radius/duration/easing directly from `@ferryline/design-tokens` — the same real package
+  `apps/site` and `apps/docs` build their own Tailwind themes from (see
+  [Core Concepts](/docs/core-concepts) for the shared-tokens story). None of this ships to consumers:
+  `tailwindcss`, `@tailwindcss/postcss`, and `@ferryline/design-tokens` are `devDependencies` of the
+  widget package, not runtime ones.
+
+### CSS custom properties still exist, but for a smaller surface than before
+
+8 properties remain real, live, and settable from outside the shadow root — down from an earlier
+12, and several defaults changed along the way:
+
+| Property                    | Default                 | Affects          |
+| --------------------------- | ----------------------- | ---------------- |
+| `--ferryline-font`          | `system-ui, sans-serif` | Base font family |
+| `--ferryline-font-size`     | `15px`                  | Base font size   |
+| `--ferryline-fg`            | `#000000`               | Text color       |
+| `--ferryline-bg`            | `#ffffff`               | Shell background |
+| `--ferryline-border-radius` | `20px`                  | Corner radius    |
+| `--ferryline-muted`         | `#66696b`               | Secondary text   |
+| `--ferryline-danger`        | `#dc2626`               | Error text       |
+| `--ferryline-z-index`       | `1000`                  | Stacking context |
+
+```css
+ferryline-widget {
+  --ferryline-border-radius: 12px;
+  --ferryline-font: "Inter", sans-serif;
+}
+```
+
+**Four properties from the older table are dead — setting them now has zero visual effect.**
+Disclosed plainly rather than left for you to discover by trial and error:
+
+- `--ferryline-border` — the shell has no border in the current design at all; it uses a drop
+  shadow instead.
+- `--ferryline-spacing` — shell padding is a hardcoded Tailwind utility (`p-6`) now, not a variable.
+- `--ferryline-accent` — the primary call-to-action is hardcoded `bg-brand` (Ferryline's real
+  indigo, `#4F46E5`, from `@ferryline/design-tokens`) with a hardcoded hover state; links use
+  `text-brand` the same way.
+- `--ferryline-accent-fg` — the CTA's text color is hardcoded `text-on-brand` (`#ffffff`).
+
+### A real trade-off, not glossed over
+
+This is a genuine regression in re-theming flexibility, worth stating plainly rather than
+minimizing: a downstream consumer can no longer recolor the primary button, links, shell border, or
+shell spacing via a CSS custom property at all. The only remaining override surface for those four
+is the coarser `::part()` selectors below (`ferryline-widget::part(build-button) { background:
+... }`), which don't unify CTA + link color the way the old `--ferryline-accent` token did in one
+place. In exchange, the widget's own visual identity now matches Ferryline's real brand exactly, by
+construction, with one real source of truth (`@ferryline/design-tokens`) instead of a second,
+independently-maintained set of hex values that could silently drift from it — which is exactly
+what happened to the old defaults table above before this rewrite. Which trade-off is right depends
+on whether you need to override the brand color at all; if you don't, this change is invisible to
+you.
+
+Below 480px viewport width, the widget docks to the bottom of the viewport as a mobile bottom sheet
+(rounded top corners only, scrollable if content exceeds 85% of viewport height) — unchanged by the
+Tailwind migration. If you're embedding it inside your own bottom-sheet container at that width,
+override `position` / `inset` on the `ferryline-widget` element itself — the cascade allows it.
+
+## `::part()` selectors
+
+Shadow-DOM `part` attributes are exposed for deeper styling with `::part()`. There are 22 of them,
+read directly from `src/index.ts`:
+
+`shell`, `network`, `wallet-error`, `inbound-status`, `status`, `quote`, `preview`,
+`preview-heading`, `preview-summary`, `decoded-call`, `wallet-connect`, `wallet-module-button`,
+`build-button`, `cancel-button`, `confirm-button`, `source-tx`, `dest-tx`, `delivery-caveat`,
+`failure`, `reset-button`, `faucets`, `faucet-link`
+
+```css
+ferryline-widget::part(shell) {
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+}
+```
+
+## Wallet support
+
+Wired against Stellar Wallets Kit's real `defaultModules()` bundle: Albedo, Freighter, Fordefi,
+Rabet, xBull, LOBSTR, Hana, Klever, OneKey, Bitget, Cactus Link, D'CENT, Scopuly — whatever that
+function returns from the installed kit version, rendered as connect buttons inside the transaction
+preview step. Only one of these has actually been driven end-to-end through a real, installed
+browser extension: Freighter, via the package's own Playwright E2E run (`e2e/`) against real Stellar
+testnet infrastructure. The rest are wired identically through the same kit but have not been
+independently verified the same way — the README is explicit that confirming which ones actually
+work through a real installed extension is left to the repo's own phase reports, not assumed from
+the kit wiring alone.
+
+Before any wallet ever sees a `signTransaction` call, the widget decodes and renders the real built
+step — contract/function for a Stellar invocation, the real ERC-20/TokenMessengerV2 call for an EVM
+step, never raw XDR or hex — behind an explicit Confirm/Cancel. This is structural, not just a UI
+convention: the internal state machine's `confirmPreviewAndSign` function is the only thing in the
+package that can produce a `signing` phase, and it's called from exactly one place in `src/index.ts`
+— the confirm-button handler, itself reachable only while the phase is `preview`.
+
+## Testnet mode and faucets
+
+In `network="testnet"` mode, the widget surfaces two real, public testnet faucet links:
+
+- Friendbot (`https://friendbot.stellar.org`) — XLM
+- Circle's testnet faucet (`https://faucet.circle.com`) — USDC, supports Stellar testnet directly
+
+## Known limitations
+
+**No React wrapper (v0.x).** Covered above — the scope note is explicit that this is deliberate for
+this phase, not an oversight.
+
+**No testnet USDT0.** `network="testnet"` only ever registers the `usdc-cctp` rail. This isn't a
+widget-level restriction layered on top of a capable SDK — `Usdt0LayerZeroAdapter`'s own
+constructor option type only accepts `{ network: "mainnet" }`, because USDT0 has no Stellar testnet
+deployment to test against at all (see [Core Concepts](/docs/core-concepts#the-two-rails)).
+
+**Outbound delivery isn't a guaranteed SLA, even with a relayer configured.** A self-hosted
+Ferryline outbound relayer now exists (see [Registering an outbound transfer](#outbound-registration-automatic)
+above and [Relayer](/docs/relayer)), and the widget registers with it automatically — so outbound
+delivery normally completes on its own now, closing what used to be a real, unconditional gap.
+What hasn't changed: `receiveMessage` remains genuinely permissionless by CCTP's own design, per
+Circle's own technical guide —
+
+> An API consumer must query this attestation and submits it onchain to the destination domain's
+> MessageTransmitterV2#receiveMessage function
+
+— so if no relayer is configured, or the configured one is unavailable, misconfigured, or has hit
+its own daily gas ceiling, delivery does not complete itself. The sender, recipient, or an
+integrator's own infrastructure can still submit it manually at any time, exactly the same real
+fallback that existed before the outbound relayer shipped — see the
+[end-to-end walkthrough](/docs/bridge-walkthrough) for that manual path, and
+[Security & Verification](/docs/security) for the sourced writeup behind both the original finding
+and its resolution.
+
+## A note on what's unverified here
+
+This page describes real, current source, rewritten once already after an earlier version was found
+to describe a pre-Tailwind-migration, pre-outbound-relayer state of this package. Two things in the
+current version are still worth treating differently from the rest, disclosed rather than glossed
+over: `packages/widget/README.md`'s own "Theming" section was not updated by the Tailwind restyle
+(confirmed directly — the restyle commit doesn't touch that file), so it still describes the old
+12-property table; this page's theming section was rewritten from the real source
+(`tailwind.config.ts`, `style.css`, `build-style.mjs`) rather than from that now-stale README
+section, and the README itself still needs the same fix. And the wallet module list beyond
+Freighter is wired but not independently confirmed against a real installed extension — take that
+one at face value as "wired, not (yet) proven."

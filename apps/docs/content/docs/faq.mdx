@@ -1,0 +1,124 @@
+---
+title: FAQ
+description: Real, specific answers pulled from this project's own source, tests, and verification docs.
+---
+
+This page answers questions that come up from reading the code and the project's own verification
+documents, not generic open-source boilerplate. A real `FAQ.md` also lives at the repo root; this
+page draws from it and from the wider source rather than replacing it. Where an answer is short on
+purpose, it links to the page that actually works through the reasoning — see
+[Core Concepts](/docs/core-concepts) especially.
+
+## Why does `maxFee` have no default?
+
+Short answer: neither `maxFee` nor `minFinalityThreshold` has been verified end to end for every
+possible input, even though specific values (`maxFee: "0"`, and both `1000` and `2000` for
+`minFinalityThreshold`) have since been confirmed to work in real, first-party testnet transactions.
+The policy of shipping no default was kept even after that confirmation, deliberately. See
+[Core Concepts](/docs/core-concepts#why-maxfee-and-minfinalitythreshold-have-no-default) for the full
+reasoning, including the SDK's own source comment explaining it.
+
+## Why is USDT0 mainnet-only?
+
+Because there's no Stellar testnet deployment of the USDT0 OFT to test against — not a policy choice
+this project could relax. `packages/core/VERIFIED.md` records the check directly: LayerZero's own
+metadata API returns `{}` when queried for USDT0 on `stellar-testnet`, and Horizon's testnet only
+turns up 13 unrelated issuers of an asset that happens to share the "USDT0" code. LayerZero does run a
+Stellar _testnet_ endpoint (eid `40600`), but no USDT0 OFT is attached to it. So
+`Usdt0LayerZeroAdapter`'s constructor option type is literally `{ network: "mainnet" }`, not a
+`"testnet" | "mainnet"` union — constructing it for testnet is a compile-time impossibility, not a
+runtime check. See [Core Concepts](/docs/core-concepts#the-two-rails).
+
+## Has this been audited?
+
+No. `contracts/router/SCOPE.md` states this plainly: no formal verification or third-party audit has
+happened yet. Per the project's own roadmap, an Audit Bank engagement is _planned_, and the router's
+`THREAT_MODEL.md` (a STRIDE-based, invariant-by-invariant analysis with tests behind each invariant)
+exists specifically so that engagement can start from a settled threat model instead of reconstructing
+one from Rust source — matching the SDF Audit Bank's own stated precondition of a completed threat
+model. Planned is not the same as scheduled or completed; nothing here should be read as "audited" or
+"audit in progress." See [Security & Verification](/docs/security).
+
+## Does the relayer support CORS?
+
+Yes, real and current, via `@fastify/cors` and the `FERRYLINE_CORS_ORIGINS` environment variable —
+but it's fail-closed by default, not fail-open: leave it unset and every browser-based caller
+(including `<ferryline-widget>`) is silently blocked by the browser itself before the request ever
+reaches the relayer, not a `*` allow-all default. If you're calling the relayer's HTTP API directly
+from a browser, set `FERRYLINE_CORS_ORIGINS` to that page's real origin explicitly. Server-to-server
+callers were never subject to CORS in the first place, so this only matters for browser-based
+integrations. See [`/docs/relayer`](/docs/relayer#cors).
+
+## What happens to an outbound Stellar→EVM transfer after it's attested — does it deliver itself?
+
+It depends on whether you registered it with a relayer. A self-hosted Ferryline outbound relayer
+now exists (`packages/relayer/`, opt-in per deployment) — if you called `@ferryline/sdk`'s
+`Ferryline.registerOutboundTransfer(transferId)` on the transfer's final step (the widget does this
+automatically), the configured relayer watches for the attestation and submits the destination
+chain's `receiveMessage` call itself, the same way the inbound direction always has.
+
+If no relayer is configured — or the one you configured is unavailable, misconfigured, or has hit
+its own daily gas ceiling — then no, it doesn't complete itself: CCTP's `receiveMessage` remains
+permissionless by the protocol's own design, meaning anyone can submit it, but nothing does so
+automatically without a registered relayer. `track()` will keep reporting `verified` (attested, not
+yet delivered) until someone — the sender, the recipient, or their own infrastructure — submits that
+call manually. This doesn't put funds at risk either way (the attestation and mint recipient are
+correct the whole time), just delivery timing. See
+[Core Concepts](/docs/core-concepts#three-problems-solved-once) and
+[the end-to-end walkthrough](/docs/bridge-walkthrough) for both the automatic and manual paths, with
+real transaction hashes for each.
+
+## Is the relayer's API-key auth production-grade?
+
+No, and its own source comment says so directly. `packages/relayer/src/http/auth.ts` describes it as
+an "MVP bearer-token allow-list", adding:
+
+> Per the phase-3 sign-off, this is deliberately NOT a full auth system: no sessions, no scopes, no
+> key rotation UI — just enough to gate who the sponsor account pays gas for.
+
+Keys are stored as a SHA-256 hash (never plaintext) in the `api_keys` table, and there's no admin
+endpoint to create or revoke one yet — the relayer's own README documents inserting a row directly
+with `psql` for local testing. See [`/docs/relayer`](/docs/relayer).
+
+## Why does a whole batch payout revert if just one leg fails?
+
+Because that's Soroban's own default behavior for cross-contract calls, and the router doesn't
+override it for v1. `contracts/router/SCOPE.md` calls this out explicitly: batch payouts are
+all-or-nothing — if any leg's underlying rail call fails, the entire transaction reverts, including
+every leg that already succeeded in that same call. Isolated-per-leg semantics (one leg failing
+without blocking the others) would need `try_invoke_contract` instead of the plain `invoke_contract`
+path, plus its own design pass, since `try_invoke_contract` doesn't catch resource-limit or internal
+host errors — that work hasn't started. See [`/docs/router`](/docs/router).
+
+## Can the router be paused or upgraded if something goes wrong?
+
+No, on both counts, and `contracts/router/SCOPE.md` frames both as deliberate choices rather than
+gaps: there's no admin address, no pause function, no denylist, and no upgrade mechanism (no
+admin-gated `upgrade()`, no proxy pattern) anywhere in the router. The reasoning given is that an
+upgrade or pause/admin-override mechanism is itself a privileged code path that, if compromised,
+bypasses every other safety property regardless of how carefully the rest of the contract is written.
+The underlying rail contracts (Circle's TokenMessengerMinter, the USDT0 OFT) do have their own
+pause/denylist/admin machinery — the router doesn't duplicate it. See [`/docs/router`](/docs/router)
+and [Security & Verification](/docs/security).
+
+## What's still genuinely unresolved, rather than just undocumented?
+
+Two specific, open questions recorded in `packages/core/VERIFIED.md`'s "Not yet verified" section,
+both blocked on a funded mainnet operator account rather than on missing code:
+
+- Whether inbound USDT0 can be delivered to a Stellar smart-account (C-address) recipient, or to a
+  muxed (M-address) one — the SDK currently throws `UNSUPPORTED_RECIPIENT_KIND` for both.
+- What happens when USDT0 is sent to a Stellar account with no trustline for it — specifically,
+  whether LayerZero retries delivery once a trustline is added after the fact, or the transfer is
+  simply lost to the sender's side. The SDK's inbound quote already fails the `recipient-trustline`
+  check and `build()` refuses, so this doesn't create a stuck transfer today, but the retry-after-fix
+  behavior itself is unverified.
+
+Both experiments (`exp:inbound-usdt0-no-trustline` and `exp:inbound-usdt0-c-address`) are named as
+real starting points in [Contributing](/docs/contributing#where-help-is-genuinely-needed-right-now).
+
+## Is there a CLA, a code of conduct, or a formal contributor process?
+
+Not yet. There's no CLA of any kind, no separate contributor `CODE_OF_CONDUCT` file, no `CODEOWNERS`
+file, and no PR or issue template — `.github/` currently contains only the CI workflow. See
+[Contributing](/docs/contributing#what-isnt-set-up-yet) for what actually exists today.

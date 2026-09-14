@@ -1,0 +1,342 @@
+---
+title: "Bridge USDC end-to-end"
+description: A real, complete USDC transfer in both directions between Stellar and an EVM chain, with real transaction hashes.
+---
+
+This walkthrough runs the full real sequence: quote, build, sign, submit, track, both directions,
+on testnet, with real code. It's USDC/CCTP specifically — USDT0 has no Stellar testnet deployment
+at all, so there's no safe sandbox to run an equivalent USDT0 walkthrough in; see
+[the note at the end](#what-about-usdt0) for what changes if you're moving USDT0 on mainnet instead.
+
+Every number, address, and transaction hash quoted in the "what actually happened" boxes below is
+real — pulled directly from this project's own dated experiment reports
+(`packages/core/verified/experiments/`), not invented for this page.
+
+## Prerequisites
+
+- `pnpm add @ferryline/sdk @stellar/stellar-sdk viem`
+- A Stellar testnet account with some XLM (fund it via [Friendbot](https://friendbot.stellar.org))
+  and some testnet USDC (fund it via [Circle's testnet faucet](https://faucet.circle.com)) — both
+  real, public, no API key needed, per the widget's own documented setup.
+- An EVM address on the destination testnet (this walkthrough uses `ethereum-sepolia`) to receive
+  funds on the way out, and a small amount of Sepolia ETH on it for the way back.
+
+## Part 1 — Outbound: Stellar → Ethereum Sepolia
+
+The real step sequence this part walks through, matching the code below exactly:
+
+```mermaid
+flowchart TD
+  A["quote()"] --> B["build()"]
+  B --> C{"steps.length"}
+  C -->|"2 — needs approve"| D["sign + submit approve"]
+  D --> E["prepareStep(id, 1)"]
+  E --> F["sign + submit burn"]
+  C -->|"1 — allowance already covers it"| F
+  F --> G["markSubmitted(id, burnTxHash)"]
+  G --> H{"relayer-url configured?"}
+  H -->|"yes"| I["registerOutboundTransfer(id)<br/>on the final step only"]
+  H -->|"no"| J["track() — verified, then stuck"]
+  I --> K["track() — verified, then delivered<br/>(relayer submits receiveMessage)"]
+  J --> L["manual receiveMessage<br/>(anyone, permissionless)"]
+```
+
+### Set up the client
+
+```ts
+import { rpc, Keypair, TransactionBuilder, Networks } from "@stellar/stellar-sdk";
+import { Ferryline, UsdcCctpAdapter } from "@ferryline/sdk";
+
+const stellarRpc = new rpc.Server("https://soroban-testnet.stellar.org");
+const senderKeypair = Keypair.fromSecret(process.env.STELLAR_SECRET!);
+
+const ferryline = new Ferryline({
+  network: "testnet",
+  rpcUrl: "https://soroban-testnet.stellar.org",
+  // Optional, but this is what opts an outbound transfer into automatic delivery below (see
+  // "Register for automatic delivery" further down) — omit both to fall back to the fully manual
+  // path instead.
+  relayerUrl: "https://your-relayer.example.com",
+  relayerApiKey: process.env.RELAYER_API_KEY,
+});
+ferryline.registerAdapter(
+  new UsdcCctpAdapter({ network: "testnet", stellarRpc, store: ferryline.store }),
+);
+```
+
+### Quote, then build
+
+```ts
+const quote = await ferryline.quote({
+  asset: "USDC",
+  from: { chain: "stellar", address: senderKeypair.publicKey() },
+  to: { chain: "ethereum-sepolia", address: "0x78253429b7483FBcCEf90e943526BB990a4D5b50" },
+  amount: "0.5",
+  parameters: { maxFee: "0", minFinalityThreshold: 2000 },
+});
+
+const built = await ferryline.build(quote);
+console.log(built.steps.length, "step(s)");
+```
+
+**`built.steps.length` is 1 or 2, and this is real, not an edge case to special-case away.** If the
+TokenMessengerMinter contract doesn't yet have a sufficient USDC allowance from your account,
+`build()` returns two steps: an `approve` (index 0) and a **deferred** burn (index 1, `kind:
+"stellar-transaction-deferred"`) that can't be assembled until the approve confirms on-chain. If a
+prior transfer already left a sufficient allowance, `build()` skips straight to a single, ready
+`stellar-transaction` burn step. Both are real, observed outcomes in this project's own testnet
+runs — write code that checks `steps.length` rather than assuming one shape.
+
+### Sign and submit a ready step
+
+Every ready step (`kind: "stellar-transaction"`) is unsigned XDR. A minimal sign-and-submit helper:
+
+```ts
+async function signAndSubmit(xdr: string, keypair: Keypair): Promise<string> {
+  const tx = TransactionBuilder.fromXDR(xdr, Networks.TESTNET);
+  tx.sign(keypair);
+  const result = await stellarRpc.sendTransaction(tx);
+
+  // Wait for real ledger confirmation before doing anything that depends on this transaction's
+  // on-chain effects — submission only means the network accepted it into the mempool. Skipping
+  // this wait is a real bug this project found and fixed: a wallet's own signing UI can return
+  // long before the ledger actually confirms, and prepareStep() for a deferred burn will correctly
+  // refuse (ALLOWANCE_INSUFFICIENT) if called too early.
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const status = await stellarRpc.getTransaction(result.hash);
+    if (status.status === "SUCCESS") return result.hash;
+    if (status.status === "FAILED") throw new Error(`transaction failed: ${result.hash}`);
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+  }
+  throw new Error(`transaction not confirmed after 40 attempts: ${result.hash}`);
+}
+```
+
+### Walk through the steps
+
+```ts
+import { isFinalStep } from "@ferryline/sdk";
+
+let burnTxHash: string;
+
+if (built.steps.length === 2) {
+  // Step 0: approve. Its hash is NOT what you pass to markSubmitted — see the note below.
+  await signAndSubmit(built.steps[0].xdr, senderKeypair);
+
+  // Now that the approve is confirmed on-chain, the deferred burn can be assembled.
+  const burnStep = await ferryline.prepareStep(built.transferId, 1);
+  burnTxHash = await signAndSubmit(burnStep.xdr, senderKeypair);
+} else {
+  burnTxHash = await signAndSubmit(built.steps[0].xdr, senderKeypair);
+}
+
+// markSubmitted's own doc comment says "after submitting the first step," but for a 2-step
+// transfer that's imprecise in practice: track() reads this hash and queries Circle's Iris
+// attestation service by it directly, so it must be the BURN's hash specifically, not the
+// approve's — passing the approve's hash here would leave track() polling Iris forever for a
+// transaction Iris never attests.
+await ferryline.markSubmitted(built.transferId, burnTxHash);
+```
+
+### Register for automatic delivery
+
+The burn's the final step for this transfer (`isFinalStep` returns true regardless of whether it
+was a 1-step or 2-step build) — the right moment to opt into automatic delivery, if a relayer is
+configured:
+
+```ts
+if (isFinalStep(built, built.steps.length - 1)) {
+  await ferryline.registerOutboundTransfer(built.transferId);
+}
+```
+
+This is a no-op (never throws) if `relayerUrl` wasn't set in the client config above — see
+[SDK Reference](/docs/sdk-reference#registeroutboundtransfer) for the exact timing rule and why
+calling it any earlier is a real bug this project already shipped and fixed. With a relayer
+configured, this is normally all it takes for delivery to complete on its own; skip to
+[the honest limits of that claim](#delivery-isnt-a-guaranteed-sla) if you want the caveats before
+relying on it.
+
+### Track it to completion
+
+```ts
+for await (const status of ferryline.track(built.transferId)) {
+  console.log(status.stage, status.detail ?? "");
+  if (status.stage === "delivered" || status.stage === "failed") break;
+}
+```
+
+`track()`'s outbound path polls the Stellar burn for confirmation, then Circle's Iris attestation
+service, then the destination chain's `MessageTransmitterV2.usedNonces` — yielding `submitted` →
+`verified` → `delivered` as each hop completes.
+
+### What actually happened when Ferryline's own team ran this
+
+A real transfer through this exact sequence, from a fresh sender with no prior allowance (so a
+real 2-step run): sender `GBBA3HN2PNOAJGR6R5VY34SQFDFTZFQIGDPYATJB34UXXFUHVR4KZRAZ`, requesting
+0.5 USDC to `0x78253429b7483FBcCEf90e943526BB990a4D5b50` on `ethereum-sepolia`. The real approve
+and burn were signed through an actual installed Freighter browser extension (not a scripted
+keypair), landing burn transaction
+`c7463fbdc056a7c22f20cd1845fe8109d409699ed72a39809c1976577a6b6ff8` on ledger `4640110`. Circle's
+Iris returned a real, complete attestation within seconds, and `track()` correctly reported
+`Verified, delivering`.
+
+**Dated context worth knowing:** this specific run (2026-09-12) predates
+`registerOutboundTransfer()` and the outbound relayer, so it never registered for automatic
+delivery — see [Delivery isn't a guaranteed SLA](#delivery-isnt-a-guaranteed-sla) below for what
+changed since, and for the honest limits of that change. A second, independent run the following
+day (2026-09-13, `dfd904fc34b2371db9a033607b237c48b672aafe8bf1436760278a30f7cd9977`) re-confirmed
+the SDK's own burn still works correctly after that change, from a sender with a standing
+allowance (so a real 1-step run this time) — real, independently-verified via Horizon, balance
+98.8050000 → 98.3050000 USDC.
+
+### Delivery isn't a guaranteed SLA
+
+Two things are both true, and worth keeping straight: outbound delivery **is now automatic by
+default**, if you registered as above — a self-hosted Ferryline outbound relayer exists
+(`packages/relayer/`, opt-in via `FERRYLINE_OUTBOUND_ENABLED=true` for whoever runs it), watches
+for the attestation the same way the inbound relayer already did, and submits `receiveMessage`
+itself once verified. Its own design doc states this plainly: "v1 is implemented, tested, and
+testnet-proven with a real Sepolia transaction." That's a real, load-bearing change from what this
+page used to say.
+
+What hasn't changed, and never will: `receiveMessage` remains genuinely permissionless by CCTP's
+own design, and `track()` itself still only _observes_ `MessageTransmitterV2.usedNonces(nonce)` —
+it never submits the call itself, registered relayer or not. So if no relayer is configured, or the
+one you configured is unavailable, misconfigured, or has hit its own daily gas ceiling, delivery
+does **not** complete itself — exactly the situation the real 2026-09-12 run above hit, before this
+capability existed at all. In that case, anyone holding the real message and attestation bytes can
+still submit it by hand and pay the gas — the sender, the recipient, or your own infrastructure.
+Fetching those bytes and submitting it directly, using the SDK's own exported ABI:
+
+```ts
+import { createWalletClient, http } from "viem";
+import { sepolia } from "viem/chains";
+import { createIrisClient, MESSAGE_TRANSMITTER_V2_ABI } from "@ferryline/sdk";
+
+const iris = createIrisClient("https://iris-api-sandbox.circle.com");
+const [message] = await iris.messagesByTx(/* sourceDomain */ 27, burnTxHash);
+if (!message || message.status !== "complete") {
+  throw new Error("attestation not ready yet");
+}
+
+// Any funded account works here — CCTP's receiveMessage is permissionless, it doesn't have to be
+// the sender, the recipient, or anything Ferryline-specific.
+const client = createWalletClient({ chain: sepolia, transport: http(), account: relayerAccount });
+await client.writeContract({
+  address: "0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275", // MessageTransmitterV2, Sepolia
+  abi: MESSAGE_TRANSMITTER_V2_ABI,
+  functionName: "receiveMessage",
+  args: [message.message as `0x${string}`, message.attestation as `0x${string}`],
+});
+```
+
+This is exactly what Ferryline's own team did to complete the real transfer above: after 46
+minutes with no automatic relay, they re-fetched the same message and attestation from Iris and
+submitted it by hand, in Sepolia transaction
+`0x0e0591c2b5f3998db5dd95dac2e921b3a61a424e04522c64784c30d03028a2a6`. The recipient's real balance
+rose from 19.0 to 19.5 USDC immediately after.
+
+## Part 2 — Inbound: Ethereum Sepolia → Stellar
+
+This direction has had automatic delivery from the start, via the self-hosted relayer (see
+[the Relayer docs](/docs/relayer) for running your own). The SDK builds the burn; the relayer
+watches for it and completes the mint. The real step sequence, matching the code below exactly:
+
+```mermaid
+flowchart TD
+  A["encodeDepositForBurnWithHookToStellar()"] --> B["sendTransaction — real burn on Sepolia"]
+  B --> C["POST /transfers { sourceTxHash }<br/>no amount, no recipient"]
+  C --> D["poll GET /transfers/:id"]
+  D --> E{"status"}
+  E -->|"pending"| D
+  E -->|"attested"| D
+  E -->|"delivered"| F["done — real mint_and_forward<br/>landed on Stellar"]
+```
+
+### Burn on the EVM side
+
+```ts
+import { createWalletClient, http } from "viem";
+import { sepolia } from "viem/chains";
+import {
+  TOKEN_MESSENGER_V2_ABI,
+  encodeDepositForBurnWithHookToStellar,
+  buildForwarderHookData,
+} from "@ferryline/sdk";
+
+// mintRecipient and destinationCaller must both be the real testnet CctpForwarder contract id —
+// anything else strands the funds on arrival (see Core Concepts). This example uses the real
+// testnet forwarder id this project has already used: CA66Q2WFBND6V4UEB7RD4SAXSVIWMD6RA4X3U32ELVFGXV5PJK4T4VSZ.
+const forwarderContractId = "CA66Q2WFBND6V4UEB7RD4SAXSVIWMD6RA4X3U32ELVFGXV5PJK4T4VSZ";
+
+const hookData = buildForwarderHookData(recipientStellarAddress);
+const data = encodeDepositForBurnWithHookToStellar(
+  {
+    amount: 1_000_000n, // 1 USDC, 6dp
+    destinationDomain: 27, // Stellar
+    mintRecipient: forwarderBytes32,
+    burnToken: usdcSepoliaAddress,
+    destinationCaller: forwarderBytes32,
+    maxFee: 0n,
+    minFinalityThreshold: 2000,
+    hookData,
+  },
+  forwarderContractId,
+);
+
+const burnTxHash = await client.sendTransaction({ to: tokenMessengerV2Address, data });
+```
+
+### Register the burn with your relayer
+
+```bash
+curl -X POST https://your-relayer.example.com/transfers \
+  -H "Authorization: Bearer $RELAYER_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "transferId": "'"$(node -e 'console.log(require("ulidx").ulid())')"'",
+    "sourceChain": "ethereum-sepolia",
+    "sourceTxHash": "'"$BURN_TX_HASH"'",
+    "rail": "usdc-cctp"
+  }'
+```
+
+Notice what's deliberately absent: no `amount`, no `recipient`. The relayer extracts both itself
+from the verified on-chain CCTP message once it's attested — never trusting either from whoever
+registers the transfer. This is a real, load-bearing security property, not an oversight.
+
+### Poll it to delivery
+
+```bash
+curl https://your-relayer.example.com/transfers/$TRANSFER_ID
+```
+
+`status` moves through `pending` → `attested` → `delivered`. Once `attested`, the response's own
+`amount`/`recipient` fields populate from the verified message.
+
+### What actually happened when Ferryline's own team ran this
+
+A real burn from `0x78253429b7483FBcCEf90e943526BB990a4D5b50` on `ethereum-sepolia` — transaction
+`0x75f9db69d5618f11564e78001586d680c88fe1b0f54dbb1b7ae91a42fa177c0c`, 1 USDC toward Stellar account
+`GA3CZKET5CLA6FXMZ56L4SYSXQYQTSD42WBSRIOZ6Q4WGKVFY6D2IZC2` — registered with a real, running,
+Docker-composed relayer instance. The real timeline: `pending` at 12:57:08 UTC, `attested` at
+13:15:22 (roughly 18 minutes — Standard Transfer finality, not a stall), `delivered` at 13:15:57,
+completing Stellar transaction
+`9ab4cedb1520c8e3f7fceb0cf92007eb01891fa266337f1dbaf2f5765d4e3c1c`. The recipient's real USDC
+balance rose by exactly 1.0000000, confirmed independently via Horizon.
+
+## What about USDT0?
+
+The shape is identical — `quote()` → `build()` → sign → `markSubmitted()` → `track()`, via
+`Usdt0LayerZeroAdapter` instead of `UsdcCctpAdapter` — but two real constraints change the picture:
+
+- `Usdt0LayerZeroAdapter` only constructs against `network: "mainnet"`. There's no Stellar testnet
+  OFT deployment to point it at, so this isn't a walkthrough you can safely run as a trial —
+  it's real mainnet activity with real funds from the first call.
+- There's no deferred step and no rail-specific `parameters` object; LayerZero's own `quote_send`/
+  `quote_oft` calls supply the fee directly.
+
+See [SDK Reference](/docs/sdk-reference) for the adapter's exact interface, and
+[Security & Verification](/docs/security) for the one real, decoded mainnet USDT0 transfer this
+project has independently confirmed end-to-end.

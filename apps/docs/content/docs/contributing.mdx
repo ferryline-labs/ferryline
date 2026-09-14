@@ -1,0 +1,151 @@
+---
+title: Contributing
+description: How issues get scoped, the real build/test/lint commands, what CI actually checks, and what isn't set up yet.
+---
+
+A real `CONTRIBUTING.md` lives at the repo root — this page draws from it and from root `README.md`'s
+own Contributing section, rather than replacing either.
+
+## The philosophy, quoted
+
+The root `README.md`'s own Contributing section states this plainly, and it's worth quoting exactly
+rather than paraphrasing:
+
+> Issues are scoped from this project's own real, dated findings, not invented busywork: every issue
+> we open links to the exact experiment report, test, or code location that surfaced it.
+
+In practice this means a change here should trace back to something real: a failing check, a
+line in [`packages/core/VERIFIED.md`](/docs/security), a BLOCKED experiment result, or a gap this
+documentation already discloses. If you're proposing something that isn't grounded in one of those,
+say so explicitly in the issue or PR rather than implying it fixes a problem someone already found.
+
+## Development setup
+
+Requirements, verbatim from the README: Node 22.12+ (CI itself runs Node 24), pnpm 11, Rust stable
+with the `wasm32v1-none` target, and [stellar-cli](https://github.com/stellar/stellar-cli) 26 for the
+contract build. `package.json` pins `packageManager: "pnpm@11.9.0"`.
+
+```sh
+pnpm install
+pnpm build            # turbo: builds every TypeScript package in dependency order
+pnpm test             # vitest in every TypeScript package (see Security & Verification for the
+                       # current real count — it changes often enough that hardcoding it here
+                       # would just go stale)
+pnpm typecheck
+pnpm lint             # eslint, zero errors expected
+pnpm format           # prettier --check, zero violations expected
+```
+
+Those six commands map directly to the `scripts` block in the root `package.json`: `build` is
+`turbo run build`, `typecheck` is `turbo run typecheck`, `test` is `turbo run test`, `lint` is
+`eslint .`, and `format` is `prettier --check .` (there's also a `format:write` script that runs
+`prettier --write .`, for actually fixing formatting rather than just checking it).
+
+For the Soroban router, from `contracts/router`:
+
+```sh
+cargo fmt --check
+cargo clippy --all-targets
+cargo test            # 32 tests
+stellar contract build
+```
+
+The relayer additionally has real live-database integration tests (see
+[Security & Verification](/docs/security) for the current count and why this page doesn't hardcode
+it) that need a running Postgres
+instance — see [`/docs/relayer`](/docs/relayer) and the package's own README for
+`docker compose up -d postgres` plus `pnpm vitest run --config vitest.integration.config.ts`. The
+widget has a real, manual end-to-end test against an actual installed browser wallet extension,
+documented in `packages/widget/e2e/README.md`.
+
+The README calls out explicitly that `pnpm lint` and `pnpm format` are "both part of this project's
+real definition of green, not optional extras" — run them alongside build/typecheck/test before
+considering any change finished, not just before opening a PR.
+
+### Experiments aren't part of the test suite
+
+[`experiments/`](/docs/security) holds operator-run scripts that hit live endpoints and can spend
+real testnet or mainnet assets — deliberately excluded from `pnpm test`. Each one writes a dated
+result file under `packages/core/verified/experiments/` and stops with an explicit `BLOCKED` verdict
+when it lacks funds or keys, rather than assuming a result. You won't need to run these to make most
+contributions, but they're the reason certain behaviors in this documentation are marked unverified
+instead of just asserted — see [Core Concepts](/docs/core-concepts) and the [FAQ](/docs/faq) for
+where that shows up concretely.
+
+## What CI actually checks
+
+`.github/workflows/ci.yml` defines exactly two jobs, and a PR has to pass both:
+
+**`typescript`** — in this exact step order:
+
+1. `pnpm install --frozen-lockfile`
+2. `pnpm build`
+3. `pnpm lint`
+4. `pnpm format`
+5. `pnpm typecheck`
+6. `pnpm test`
+
+Build runs before lint on purpose, and the workflow file says exactly why, in a comment worth
+reading before you reorder anything locally:
+
+> build first: packages/widget imports @ferryline/core and @ferryline/sdk as package dependencies,
+> and the type-aware eslint rules below can only resolve those imports once each package's
+> dist/\*.d.ts exists. Linting before building left widget's imports unresolved on a clean checkout,
+> tripping @typescript-eslint/no-unsafe-\* everywhere.
+
+So if you're debugging a lint failure locally that doesn't reproduce in CI's order, run `pnpm build`
+first — a stale or missing `dist/` in `@ferryline/core` or `@ferryline/sdk` is a likely cause.
+
+**`contracts`** — running with `working-directory: contracts/router`, on Rust stable with the
+`wasm32v1-none` target and `stellar-cli` pinned to `26.1.0`:
+
+1. `cargo fmt --all -- --check`
+2. `cargo clippy --all-targets -- -D warnings`
+3. `cargo test`
+4. `stellar contract build`
+
+Note `-D warnings` on the clippy step: a clippy warning fails CI here the same as an error would,
+there's no separate "warnings are fine" tier.
+
+## Where help is genuinely needed right now
+
+The real, current `CONTRIBUTING.md` at the repo root is the canonical, kept-in-sync list — every
+item on it is a real, currently open gap with a link to the evidence behind it, not invented
+busywork; if one resolves, the real file gets updated or the item removed, not silently left stale.
+As of this writing, exactly two things are on it:
+
+- **Inbound USDT0 to a Stellar smart-account (C-address) recipient.** Whether LayerZero's OFT can
+  deliver USDT0 to a Soroban smart-account recipient at all is genuinely untested — the SDK
+  currently refuses this (`UNSUPPORTED_RECIPIENT_KIND`) rather than assume it works. The companion
+  question — what happens when USDT0 arrives at an account with no trustline, and whether delivery
+  retries once one is added — is equally open. Both are blocked on a funded mainnet operator account
+  and, for the first, a real Stellar smart account to target — not on missing code. See
+  [`packages/core/VERIFIED.md`](/docs/security)'s "Not yet verified" section for exactly what each
+  would resolve.
+- **Documentation.** This project holds itself to a high evidence bar; a claim in any README,
+  `ARCHITECTURE.md`, or verified-facts document that doesn't match the current real code is treated
+  as a real bug, not a nitpick. Doc-only PRs that fix a stale claim are genuinely welcome and don't
+  need to clear the same bar as a code change (though they should still be accurate) — this very
+  docs site was itself found to describe a stale state of the API at one point and had to be
+  corrected against real, current source, which is exactly the kind of fix this item is asking for.
+
+**Not on the list, on purpose:** an earlier version of this page also named the outbound-CCTP
+no-auto-relay gap as open work. It's since shipped — a real, self-hosted outbound relayer now
+exists (see [Relayer](/docs/relayer) and [Core Concepts](/docs/core-concepts)) — so it's been
+removed here too, matching the real `CONTRIBUTING.md`'s own current list.
+
+If you want something smaller to start with, `pnpm test`, `pnpm lint`, and `cargo clippy --all-targets
+-- -D warnings` are exactly what CI runs, so any gap you find between "passes locally" and "would
+pass in CI" is itself something worth fixing.
+
+## What isn't set up yet
+
+This project's `.github/` directory currently contains only `.github/workflows/ci.yml` — no
+`CODEOWNERS` file, no pull request template, and no issue template exist anywhere in the repository.
+There's also no separate contributor `CODE_OF_CONDUCT` file and no CLA process of any kind. None of
+that is being implied to exist elsewhere; it's simply not there yet. In practice this means: open a
+PR against the default branch, make sure the two CI jobs above pass, and describe what real finding
+or gap the change addresses, the same way the project's own issues are expected to.
+
+For open, specific questions about design decisions this project has already made deliberately (not
+gaps waiting to be filled), see the [FAQ](/docs/faq).

@@ -1,0 +1,83 @@
+---
+title: Getting Started
+description: Install the SDK, construct a client, and get your first quote.
+---
+
+This page gets a `Quote` back from a real testnet RPC endpoint, in the shortest sequence of real
+API calls that actually works. It intentionally stops at `quote()` — building, signing, and
+tracking a full transfer is the [end-to-end walkthrough](/docs/bridge-walkthrough)'s job.
+
+## Install
+
+```bash
+pnpm add @ferryline/sdk
+```
+
+That's the only package you need. `@ferryline/sdk` re-exports everything from `@ferryline/core`
+that a normal integration touches (`FerrylineError`, `InMemoryTransferStore`, every shared type) —
+you don't need to separately install or import `@ferryline/core` unless you're doing something
+low-level with it directly (its own decimal/address utilities, for instance).
+
+## Construct a client
+
+`Ferryline` itself holds no rail-specific logic — it routes a request to whichever registered
+adapter can handle it. Nothing is wired up by default, so you register the rail(s) you actually
+need:
+
+```ts
+import { rpc } from "@stellar/stellar-sdk";
+import { Ferryline, UsdcCctpAdapter } from "@ferryline/sdk";
+
+const stellarRpc = new rpc.Server("https://soroban-testnet.stellar.org");
+
+const ferryline = new Ferryline({
+  network: "testnet",
+  rpcUrl: "https://soroban-testnet.stellar.org",
+});
+
+ferryline.registerAdapter(
+  new UsdcCctpAdapter({
+    network: "testnet",
+    stellarRpc,
+    store: ferryline.store,
+  }),
+);
+```
+
+`UsdcCctpAdapter` is the USDC/CCTP rail, and it's the one to reach for on testnet — USDT0's
+adapter (`Usdt0LayerZeroAdapter`) refuses to construct on anything but `"mainnet"`, because USDT0
+has no Stellar testnet deployment at all (see [Core Concepts](/docs/core-concepts#the-two-rails)).
+Passing `ferryline.store` as the adapter's `store` means both share the same record of
+in-flight transfers; `Ferryline`'s constructor defaults it to an `InMemoryTransferStore` unless you
+pass your own.
+
+## Get a quote
+
+Every rail's `quote()` takes the same shape of request regardless of which asset or direction it
+is. Amounts are plain decimal strings, never floats:
+
+```ts
+const quote = await ferryline.quote({
+  asset: "USDC",
+  from: { chain: "stellar", address: "GBBA3HN2PNOAJGR6R5VY34SQFDFTZFQIGDPYATJB34UXXFUHVR4KZRAZ" },
+  to: { chain: "ethereum-sepolia", address: "0x78253429b7483FBcCEf90e943526BB990a4D5b50" },
+  amount: "0.5",
+  parameters: {
+    // Both required, no default ships for either — see Core Concepts for why.
+    maxFee: "0",
+    minFinalityThreshold: 2000,
+  },
+});
+
+console.log(quote.debit, quote.credit, quote.fees, quote.expiresAt);
+```
+
+`quote.checks` lists every preflight check the rail ran (address format, trustline, balance,
+route limits, whether the rail is paused) with a `remedy` on any that failed — worth inspecting
+before calling `build()`, since `build()` itself throws `PREFLIGHT_FAILED` if any check is still
+failing.
+
+From here, [Core Concepts](/docs/core-concepts) explains the rest of the lifecycle
+(`build → sign → markSubmitted → track`), and the [SDK Reference](/docs/sdk-reference) documents
+every method, option, and error code. The [end-to-end walkthrough](/docs/bridge-walkthrough) runs
+the complete sequence against a real transaction.

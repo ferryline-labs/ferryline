@@ -1,0 +1,156 @@
+---
+title: Core Concepts
+description: The two rails, the transfer lifecycle, and the three problems this project actually solves.
+---
+
+## How the pieces fit together
+
+Four real pieces, not a pipeline where every request flows through all of them — grounded in
+`ARCHITECTURE.md`'s own real system-overview diagram, simplified here to just the relationships
+between the four named in the [Introduction](/docs):
+
+```mermaid
+flowchart LR
+  Widget["@ferryline/widget<br/>&lt;ferryline-widget&gt;"] -->|"uses"| SDK["@ferryline/sdk<br/>Ferryline class"]
+  SDK -->|"quote / build / track"| Rails["CCTP + USDT0 OFT<br/>rail contracts"]
+  SDK -.->|"registerOutboundTransfer()<br/>(opt-in)"| Relayer["ferryline-relayer<br/>self-hosted"]
+  Widget -.->|"registerInboundTransfer()"| Relayer
+  Relayer -->|"watches attestation,<br/>submits the completing call"| Rails
+  OtherContract["Another Soroban contract<br/>(a vault, payroll, escrow — not Ferryline's)"] -->|"send_cross_chain(_batch)"| Router["ferryline-router"]
+  Router -->|"dispatches to"| Rails
+```
+
+Two things worth being precise about, since it's easy to assume a pipeline that isn't real: the
+**SDK never calls the router** — it talks to the CCTP/OFT rail contracts directly for its own
+quote/build/track flow, the same contracts the router also dispatches to. The router exists for a
+_different_ caller entirely: another Soroban contract (a vault, a payroll contract, anything with
+its own `require_auth` logic) that wants a one-call cross-chain send without integrating CCTP/OFT
+itself. And the relayer isn't in either of those call paths at all until you opt in — it only ever
+watches an already-broadcast burn's attestation and submits the one completing transaction, for
+whichever direction(s) you've registered with it.
+
+## The two rails
+
+Ferryline ships exactly two rail adapters today, both implementing the same `RailAdapter`
+interface from `@ferryline/core`:
+
+|                 | `UsdcCctpAdapter`                                                  | `Usdt0LayerZeroAdapter`                                                            |
+| --------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------- |
+| Asset           | USDC                                                               | USDT0                                                                              |
+| Mechanism       | Circle's CCTP (burn on source, mint on destination)                | LayerZero's OFT standard                                                           |
+| Networks        | `testnet` or `mainnet`                                             | **`mainnet` only** — constructing it with anything else throws `ROUTE_UNSUPPORTED` |
+| Deferred steps  | Yes — a burn needs a separate `approve` step first (`prepareStep`) | No — `prepareStep` is unimplemented; calling it throws `ROUTE_UNSUPPORTED`         |
+| Rail parameters | `maxFee` + `minFinalityThreshold`, both required                   | None — fees come entirely from the chain's own `quote_send`/`quote_oft`            |
+
+The USDT0 restriction isn't a current limitation waiting on more engineering time — USDT0 simply
+has no Stellar testnet deployment to test against, so the adapter refuses to pretend otherwise.
+Every USDT0 example in this documentation is real, but it's real **mainnet** activity; there's no
+safe sandbox for it the way there is for USDC/CCTP.
+
+## The lifecycle
+
+Both rails implement the same four-step shape:
+
+1. You call `quote(request)` → get back a `Quote` (debit, credit, fees, checks, expiry).
+2. You call `build(quote)` → get back unsigned steps.
+3. Your own wallet signs each step and submits it to its chain.
+4. You call `markSubmitted(transferId, sourceTxHash)`, then `track(transferId)` to follow it
+   through to delivery.
+
+In more detail:
+
+- **`quote(request)`** validates the request's format and runs every preflight check the rail
+  knows about (address format, trustline, balance, route limits, whether the rail is paused) before
+  making any other network call, so a bad request fails fast. It returns a `Quote` with an
+  expiry (`expiresAt`) — `build()` re-validates both the expiry and the checks, so a stale or
+  tampered quote can't slip through.
+- **`build(quote)`** turns an accepted quote into unsigned `TransferStep[]` and records the
+  transfer so `track()` can find it later. A step is one of three shapes: a ready-to-sign Stellar
+  transaction, a ready-to-sign EVM transaction, or a **deferred** Stellar transaction that can't be
+  assembled yet (see below).
+- **Signing is entirely yours.** The SDK never holds a key and never submits anything — it only
+  produces unsigned steps. This is deliberate: whatever wallet or signing setup you already use
+  keeps working.
+- **`markSubmitted(transferId, sourceTxHash)`** is how Ferryline learns what happened after you
+  broadcast a signed step. `track()` blocks on this — call it right after your wallet returns a
+  transaction hash for a step, not before.
+- **`track(transferId, signal?)`** is an async generator that yields one `TransferStatus` per
+  stage transition: `created → submitted → verified → delivered` (or `failed`, with a `code` and
+  whether it's `retryable`). It polls the source chain for confirmation, then the attestation layer
+  (Circle's Iris for CCTP, LayerZero Scan for OFT), then the destination chain for delivery.
+
+### The one deferred step CCTP has
+
+A CCTP burn from Stellar needs the TokenMessengerMinter contract to hold an allowance before the
+burn call can even be simulated — so `build()` returns the burn as a **deferred** step
+(`stellar-transaction-deferred`) that depends on the `approve` step landing first. Once your wallet
+signs and submits the approve step and it's confirmed on-chain, call:
+
+```ts
+const burnStep = await ferryline.prepareStep(transferId, 1);
+```
+
+Calling this before the approve is actually confirmed throws `ALLOWANCE_INSUFFICIENT`; calling it
+for the wrong step index throws `STEP_NOT_READY`. This two-step shape only exists for CCTP —
+USDT0's `send()` handles its own allowance differently and never produces a deferred step.
+
+### Opting an outbound transfer into automatic delivery
+
+For an **outbound** (Stellar→EVM) CCTP transfer specifically, there's one more real call worth
+knowing about: once you've called `markSubmitted` on the transfer's final step, call
+`ferryline.registerOutboundTransfer(transferId)` to register it with a configured relayer for
+automatic delivery. `isFinalStep(built, stepIndex)` (also exported) is the real, canonical way to
+find that point. See [SDK Reference](/docs/sdk-reference#registeroutboundtransfer) for the exact
+method and its timing rule, and the [end-to-end walkthrough](/docs/bridge-walkthrough) for it used
+in a real, complete transfer.
+
+## Three problems, solved once
+
+**Decimals.** Stellar assets carry 7 decimal places (`STELLAR_DECIMALS`); CCTP messages and the
+USDT0 OFT's shared representation both use 6 (`SHARED_DECIMALS`). `@ferryline/core`'s `Amount`
+type is always an integer `bigint` plus its own decimal count — never a float — and
+`scaleDown`/`scaleUp` convert between precisions explicitly. Scaling down never silently drops
+precision: `scaleDown` returns both the converted `amount` and the `dust` that didn't fit, so a
+caller can refund it, display it, or refuse the transfer, but never lose track of it.
+
+**Trustlines.** A Stellar recipient needs a trustline for USDT0 before it can receive it, or the
+transfer fails outright with no automatic retry. This is one of the checks `quote()` runs before
+you commit to anything — a failed `recipient-trustline` check comes back with a `remedy` telling
+the caller what to do about it (add the trustline), not just that something's wrong.
+
+**Delivery.** CCTP has no automatic delivery by default in either direction: Circle's own CCTP
+documentation says plainly that an API consumer must query the attestation and submit it onchain to
+the destination domain itself. Ferryline closes that gap with a self-hosted relayer
+(`packages/relayer/`) for **both** directions now — inbound (EVM→Stellar) has had one from the
+start, and outbound (Stellar→EVM) gained a real, testnet-proven one too, opt-in per deployment.
+`registerOutboundTransfer()`/`isFinalStep()` (above) are what opt an outbound transfer into it.
+That said, don't treat automatic delivery as a guarantee in either direction: `receiveMessage`/
+`mint_and_forward` remain genuinely permissionless by CCTP's own design, so if no relayer is
+configured — or the configured one is unavailable, misconfigured, or has hit its own daily spend
+ceiling — delivery doesn't complete itself, and `track()` will keep reporting `verified` (attested,
+not yet delivered) until someone actually submits that call, manually if needed. See
+[Relayer](/docs/relayer) for self-hosting one, and the
+[end-to-end walkthrough](/docs/bridge-walkthrough) for both the automatic and manual paths, with
+real transaction hashes for each.
+
+## Why `maxFee` and `minFinalityThreshold` have no default
+
+CCTP's rail parameters are required on every request, with no fallback value. The real reason,
+verbatim from the SDK's own source:
+
+> Rail-specific parameters. Both are REQUIRED on every request; Ferryline ships no defaults because
+> neither has been verified end to end by this repo (see the two experiment files named in the error).
+
+and, more specifically, on `maxFee`:
+
+> The unit of `max_fee` on the Stellar TokenMessengerMinter is unverified; Ferryline passes
+> 7-decimal units, and if that is wrong the burn reverts on Stellar with nothing burned rather than
+> silently overcharging.
+
+Since that comment was written, Ferryline's own team has confirmed `maxFee: "0"` and both
+`minFinalityThreshold` values (`1000` and `2000`) work end-to-end against real testnet
+transactions (see [Security & Verification](/docs/security)) — but the **policy** of shipping no
+default was kept unchanged on purpose even after that confirmation. A verified value for one
+specific input isn't the same guarantee as a verified unit conversion for every input, and this
+project would rather have every caller state both values explicitly than have one silently
+inherited default turn out to be wrong for a case nobody tested.

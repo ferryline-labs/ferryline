@@ -1,0 +1,16 @@
+{
+  "title": "Ferryline",
+  "pages": [
+    "index",
+    "getting-started",
+    "core-concepts",
+    "sdk-reference",
+    "relayer",
+    "router",
+    "widget",
+    "security",
+    "bridge-walkthrough",
+    "contributing",
+    "faq"
+  ]
+}

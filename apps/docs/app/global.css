@@ -1,0 +1,116 @@
+@import "tailwindcss";
+@import "fumadocs-ui/css/neutral.css";
+@import "fumadocs-ui/css/preset.css";
+@config "../tailwind.config.ts";
+
+/*
+ * fumadocs-ui's own chrome (sidebar, search, nav, callouts) reads color from these --color-fd-*
+ * variables directly, independent of the Tailwind `theme.colors` values @ferryline/design-tokens
+ * provides (those only reach Tailwind *utility classes*, e.g. `bg-brand`, that this app's own
+ * pages use directly). Mapped here to the exact same real hex values rather than left on
+ * fumadocs-ui's own neutral preset, so the docs site's chrome matches apps/site's brand, not a
+ * generic gray theme.
+ *
+ * Only *light*-mode values are overridden here, deliberately. @ferryline/design-tokens has no dark
+ * palette at all (its `semantic.onSurfaceDark` is "#000000" — dark *text*, not a dark *mode* — see
+ * the token file's own comment), and neither apps/site nor packages/widget has a dark design to
+ * port from; inventing a branded dark palette with nothing to ground it in isn't a real fix.
+ * Instead, dark mode (real and enabled now — see app/layout.tsx) falls back to fumadocs-ui's own
+ * real, already-imported default dark palette: the `.dark { --color-fd-background: ...; ... }`
+ * block in `fumadocs-ui/css/lib/default-colors.css` (pulled in via the `neutral.css` import above)
+ * applies automatically once next-themes puts a `.dark` class on `<html>`, since this block below
+ * only ever writes to `:root`/light and never touches `.dark`. Unbranded but real and coherent,
+ * disclosed here rather than silently left unmentioned.
+ *
+ * Disclosed gap, not silently reused or invented: fumadocs-ui's semantic `--color-fd-info`/
+ * `-warning`/`-error`/`-success`/`-idea`/`-diff-*` variables (used inside its Callout/diff
+ * components) have no equivalent role anywhere in @ferryline/design-tokens — apps/site has no
+ * callout or diff component, so there is no real audited value to port. Left on fumadocs-ui's own
+ * defaults (light and dark) rather than inventing brand-tinted versions that aren't grounded in a
+ * real source.
+ */
+@theme {
+  --color-fd-background: #ffffff;
+  --color-fd-foreground: #000000;
+  --color-fd-muted: #eff0f0;
+  --color-fd-muted-foreground: #66696b;
+  --color-fd-popover: #eff0f0;
+  --color-fd-popover-foreground: #000000;
+  --color-fd-card: #eff0f0;
+  --color-fd-card-foreground: #000000;
+  --color-fd-border: #c5c7c8;
+  --color-fd-primary: #4f46e5;
+  --color-fd-primary-foreground: #ffffff;
+  --color-fd-secondary: #e2e2e3;
+  --color-fd-secondary-foreground: #000000;
+  --color-fd-accent: #eef0ff;
+  --color-fd-accent-foreground: #4f46e5;
+  --color-fd-ring: #000000;
+}
+
+/*
+ * fumadocs-ui's own default for this ("--fd-layout-width", read via `var(--fd-layout-width,
+ * 97rem)` on its docs-layout grid, confirmed directly from its real inline style rather than
+ * assumed) caps the sidebar+main+toc content at 97rem (1552px) and lets the two outer grid
+ * columns absorb everything past that as empty margin. On a wide monitor that's a real, visible
+ * amount of dead space either side of the sidebar — verified directly via computed
+ * grid-template-columns, not just eyeballed from a screenshot: at a 2048px-wide window, the
+ * default left/right margins are 248px each; at 120rem they drop to 64px, and the main content
+ * column (where the wide code blocks and tables on this site actually live) grows from 1016px to
+ * 1384px. `--fd-layout-width` is fumadocs-ui's own documented customization point for exactly
+ * this — set once here, it cascades down to the inline style that reads it.
+ */
+:root {
+  --fd-layout-width: 120rem;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    /* fd-prefixed, not the brand `on-surface-*` tokens: those are fixed hex with no dark variant
+     * (see the @theme block's own comment above), while `bg-fd-background`/`text-fd-foreground`
+     * resolve through fumadocs-ui's real light/dark CSS variables and switch automatically. */
+    @apply bg-fd-background font-sans text-fd-foreground antialiased;
+  }
+
+  ::selection {
+    @apply bg-brand text-on-brand;
+  }
+}
+
+/*
+ * The desktop sidebar's footer pill (GitHub icon + theme switch, #nd-sidebar) is `rounded-lg` —
+ * 20px here, since @ferryline/design-tokens' own `radius` scale replaces Tailwind's stock one, not
+ * the 8px Tailwind default. fumadocs-ui's own sidebar component (layouts/docs/slots/sidebar.js)
+ * hardcodes both the GitHub icon link and, when rendering the theme switch in this slot, its
+ * buttons down to `rounded-md` (6px) — nowhere near 20px, so square-ish corners sit visibly inside
+ * the pill's much rounder ones. `rounded-full` isn't an invented style: it's fumadocs-ui's own
+ * *default* for this exact component (theme-switch.js's un-overridden `container` class already
+ * reads `rounded-full *:rounded-full`) — restoring it here rather than leaving sidebar.js's own
+ * flattened-for-this-slot override in place. Written unlayered (outside any @layer) so it reliably
+ * beats Tailwind's utility-layer classes regardless of selector specificity, per normal CSS
+ * cascade-layer rules — no !important needed. The mobile drawer's own theme switch isn't touched:
+ * it already keeps fumadocs-ui's rounded-full default (sidebar.js passes it only `className: "p-0"`
+ * there, no `*:rounded-md` override).
+ */
+#nd-sidebar a[aria-label="GitHub"],
+#nd-sidebar [data-theme-toggle] button {
+  border-radius: 9999px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
