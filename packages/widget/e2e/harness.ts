@@ -12,11 +12,14 @@ import type { TransferRequest } from "@ferryline/sdk";
 
 defineFerrylineWidget();
 
+// SENDER is informational only below (the widget takes the real address from whichever wallet you
+// connect in the browser) — set it to whatever real testnet account you'll actually sign with.
 const SENDER = "GBBA3HN2PNOAJGR6R5VY34SQFDFTZFQIGDPYATJB34UXXFUHVR4KZRAZ";
-// Same destination chain, amount, and parameters STEP 1's own proven outbound seam script used
-// successfully (experiments/widget-seam-outbound-cctp.ts) — reusing a known-working combination
-// rather than introducing an untested one for this separate, real run.
-const RECIPIENT_EVM = "0x78253429b7483FBcCEf90e943526BB990a4D5b50";
+// Same destination chain/amount/parameters shape prior real runs used
+// (experiments/widget-seam-outbound-cctp.ts). Recipient set to the STEP 6 relayer run's own real,
+// funded Sepolia sponsor address so this run's mint is independently checkable against that
+// address's real balance.
+const RECIPIENT_EVM = "0x11598bA8E624b7df301FC3d2C71165A076b7480e";
 
 const widget = document.querySelector<FerrylineWidget>("#widget")!;
 

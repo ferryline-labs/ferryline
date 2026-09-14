@@ -2,7 +2,7 @@
   "name": "ferryline-relayer",
   "version": "0.0.0",
   "private": true,
-  "description": "Completes inbound CCTP transfers to Stellar: polls attestations and submits mint_and_forward with a fee-bump.",
+  "description": "Completes CCTP transfers Circle's own infrastructure does not auto-deliver: inbound (EVM -> Stellar, fee-bumped mint_and_forward) and outbound (Stellar -> EVM, gas-paid receiveMessage).",
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {
@@ -15,12 +15,14 @@
     "record:nonce-fixtures": "tsx scripts/record-nonce-check-fixtures.ts"
   },
   "dependencies": {
+    "@fastify/cors": "^10.1.0",
     "@fastify/type-provider-zod": "^1.0.0",
     "@ferryline/core": "workspace:*",
     "@ferryline/sdk": "workspace:*",
     "@stellar/stellar-sdk": "^17.0.1",
     "fastify": "^5.12.4",
     "pg": "^8.23.0",
+    "viem": "^2.56.3",
     "zod": "^4.6.2"
   },
   "devDependencies": {

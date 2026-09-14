@@ -43,8 +43,15 @@ export async function startTestPostgres(): Promise<TestPostgres> {
   return {
     pool,
     async truncateAll() {
+      // Real, pre-existing gap found and fixed while adding the outbound tables below: this list
+      // was missing spend_ledger_events and registration_attempts (both real tables in
+      // db/schema.sql since STEP 4/5 of the inbound relayer) — a test relying on truncateAll()
+      // between cases could have seen stale rows from an earlier test in either table. Listed here
+      // in full, in schema.sql's own order, rather than left to accumulate a second gap.
       await pool.query(
-        "TRUNCATE TABLE transfers, spend_attempts, daily_spend, api_keys RESTART IDENTITY",
+        "TRUNCATE TABLE transfers, spend_attempts, spend_ledger_events, daily_spend, api_keys, " +
+          "registration_attempts, outbound_transfers, outbound_spend_attempts, " +
+          "outbound_spend_ledger_events, outbound_daily_spend RESTART IDENTITY",
       );
     },
     async stop() {

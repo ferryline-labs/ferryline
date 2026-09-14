@@ -74,20 +74,42 @@ const RAIL_LABELS: Readonly<Record<RailId, string>> = {
 
 /**
  * STEP 3 finding (widget phase, confirmed 2026-09-12 against Circle's own CCTP technical guide —
- * see technical-doc.md's threat-model table for the full, sourced writeup): outbound CCTP delivery
- * (Stellar -> EVM) has no automatic relay on testnet OR mainnet. Circle's documentation states "An
- * API consumer must query this attestation and submits it onchain to the destination domain's
- * MessageTransmitterV2#receiveMessage function" with no testnet/mainnet distinction anywhere, and
- * never describes Circle itself operating a relayer for this. `track()`'s "verified" stage means
- * the attestation is real and complete — it does NOT mean delivery is imminent or automatic. This
- * caveat exists so the widget never implies an ETA-bound "just wait" status for a step that may
- * never complete unless someone (sender, recipient, or a future dedicated relayer) submits it.
+ * see technical-doc.md's threat-model table for the full, sourced writeup), UPDATED for the
+ * outbound-auto-registration phase: Circle's own infrastructure still has no automatic relay for
+ * outbound (Stellar -> EVM) CCTP delivery on testnet OR mainnet — that has not changed and is not
+ * something this project controls. What HAS changed: Ferryline now ships a real, testnet-proven,
+ * self-hostable outbound relayer (packages/relayer/) that this widget registers with
+ * automatically once a real burn tx hash is known (see index.ts's markSubmitted call site, which
+ * triggers @ferryline/sdk's Ferryline.registerOutboundTransfer — see that method's own doc comment
+ * for the full mechanism, including its "never breaks the underlying flow" guarantee).
+ *
+ * Still NOT a guaranteed delivery-time SLA — same honesty standard as OUTBOUND_SCOPE.md's own
+ * "not a guaranteed delivery-time SLA" section, restated here for the widget's own copy:
+ * `receiveMessage` remains genuinely permissionless (Circle's own design, not this project's
+ * choice), so a transfer can still be completed manually by anyone at any time if the configured
+ * relayer is unavailable, misconfigured, or its own spend ceiling is exhausted for the day — the
+ * exact same real, already-documented recourse that existed before this phase, just no longer the
+ * ONLY path. `track()`'s "verified" stage still only means the attestation is real and complete —
+ * it does NOT mean delivery is imminent or guaranteed, with or without a relayer configured.
+ *
+ * The copy below is two variants, chosen by whether THIS widget instance has a relayer configured
+ * at all (relayerUrl set) — an integrator running the widget with no relayer configured (a real,
+ * still-fully-supported mode, see FerrylineConfig.relayerUrl's own doc comment) must not be told
+ * "a relayer is handling this" when none is registered on their behalf.
  */
-const OUTBOUND_CCTP_DELIVERY_CAVEAT =
-  "Attestation complete. Delivery on the destination chain is not automatic for this rail — it " +
-  "requires someone (you, the recipient, or an integrator's own relayer) to submit the attested " +
-  "message on-chain and pay its gas. This can be done by anyone at any time; it is not a sign of " +
-  "an error, but it also will not simply arrive on its own.";
+function outboundDeliveryCaveat(relayerConfigured: boolean): string {
+  return relayerConfigured
+    ? "Attestation complete. This transfer has been registered with the configured relayer for " +
+        "automatic delivery on the destination chain — but that is not a guaranteed delivery-time " +
+        "SLA: receiveMessage remains permissionless, so if the relayer is unavailable or its daily " +
+        "spend limit is reached, anyone (you, the recipient, or another relayer) can still submit " +
+        "the attested message on-chain and pay its gas. This is normal, expected behavior, not a " +
+        "sign of an error."
+    : "Attestation complete. Delivery on the destination chain is not automatic for this rail — it " +
+        "requires someone (you, the recipient, or an integrator's own relayer) to submit the " +
+        "attested message on-chain and pay its gas. This can be done by anyone at any time; it is " +
+        "not a sign of an error, but it also will not simply arrive on its own.";
+}
 
 /** True only for an outbound (Stellar -> EVM) CCTP quote — the specific case the caveat above applies to. */
 function isOutboundCctp(quote: Quote): boolean {
@@ -179,6 +201,7 @@ export class FerrylineWidget extends HTMLElement {
       network: this.network,
       ...(this.rpcUrl !== undefined ? { rpcUrl: this.rpcUrl } : {}),
       ...(this.relayerUrl !== undefined ? { relayerUrl: this.relayerUrl } : {}),
+      ...(this.relayerApiKey !== undefined ? { relayerApiKey: this.relayerApiKey } : {}),
     });
     return this.#client;
   }
@@ -298,6 +321,17 @@ export class FerrylineWidget extends HTMLElement {
       this.setPhase(buildSucceeded(quote, rebuilt, nextIndex));
       return;
     }
+    // This IS the final step (isFinalStep(built, stepIndex) === true here, by construction: we
+    // just confirmed there is no nextIndex) — the one, correct point to trigger outbound relayer
+    // registration. Real bug this project already shipped and fixed: calling
+    // registerOutboundTransfer from inside markSubmitted itself (which fires after EVERY step,
+    // including an outbound transfer's approve step before its burn) sent the WRONG tx hash first
+    // and caused the correct, later registration to be rejected as a duplicate by the relayer's own
+    // transferId primary key — see @ferryline/sdk's registerOutboundTransfer/isFinalStep doc
+    // comments for the full story. Fire-and-forget (never awaited into the caller's own flow
+    // beyond this): registerOutboundTransfer itself never throws and gates itself off entirely for
+    // inbound/non-CCTP transfers and when no relayer is configured — see its own doc comment.
+    await this.client().ferryline.registerOutboundTransfer(built.transferId);
     // Seed a "tracking" phase immediately, before the first real status arrives — track()'s first
     // yield can lag by however long the RPC/Horizon round-trip takes, and without this the UI would
     // otherwise show nothing between "wallet accepted the signature" and that first real update.
@@ -323,19 +357,29 @@ export class FerrylineWidget extends HTMLElement {
   // ---- Inbound relayer registration (STEP 2C) ---------------------------------------------------
 
   /** Called once an inbound EVM burn tx hash is known (from an external EVM wallet, outside this
-   * widget's own signing flow — see the confirmAndSign note on evm-transaction steps above). */
+   * widget's own signing flow — see the confirmAndSign note on evm-transaction steps above).
+   *
+   * Config source (STEP 0 of the outbound-auto-registration phase): reads relayerUrl/relayerApiKey
+   * from `this.client().ferryline.config` — the same FerrylineConfig every other client() caller
+   * already uses — rather than this class's own relayer-url/relayer-api-key attribute getters
+   * directly. Those attributes still exist and still work exactly as before; they now flow into
+   * FerrylineConfig via client() (see that method above and createWidgetClient in client.ts) instead
+   * of being read a second time here. Nothing about registerTransfer/trackRelayerTransfer's own call
+   * shape, arguments, or error handling changed — only where the URL/API key value comes from. */
   async registerInboundTransfer(
     transferId: string,
     sourceChain: ChainSlug,
     sourceTxHash: string,
   ): Promise<void> {
-    const relayerUrl = this.relayerUrl;
+    const relayerUrl = this.client().ferryline.config.relayerUrl;
     if (!relayerUrl) {
       throw new Error("registerInboundTransfer requires a relayer-url attribute or property");
     }
     const config: RelayerConfig = {
       url: relayerUrl,
-      ...(this.relayerApiKey !== undefined ? { apiKey: this.relayerApiKey } : {}),
+      ...(this.client().ferryline.config.relayerApiKey !== undefined
+        ? { apiKey: this.client().ferryline.config.relayerApiKey }
+        : {}),
     };
     await registerTransfer(config, { transferId, sourceChain, sourceTxHash, rail: "usdc-cctp" });
     this.#abort = new AbortController();
@@ -445,7 +489,7 @@ export class FerrylineWidget extends HTMLElement {
           <p part="status">${STAGE_LABELS[phase.status.stage]}</p>
           ${
             phase.status.stage === "verified" && isOutboundCctp(phase.quote)
-              ? `<div part="delivery-caveat" class="caveat">${OUTBOUND_CCTP_DELIVERY_CAVEAT}</div>`
+              ? `<div part="delivery-caveat" class="caveat">${outboundDeliveryCaveat(Boolean(this.relayerUrl))}</div>`
               : ""
           }
           ${phase.status.sourceTxHash ? `<div part="source-tx" class="tx-hash">Source tx: ${escapeHtml(phase.status.sourceTxHash)}</div>` : ""}`;

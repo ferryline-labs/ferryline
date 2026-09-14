@@ -28,15 +28,14 @@ interface OpenItem {
  * A third item, router per-transfer event emission (Repud.1), was here through 2026-09-12 and was
  * removed 2026-09-13 once THREAT_MODEL.md's own Repud.1 row was updated to "implemented and
  * tested as of STEP 9" — see that file for the real change, not reconstructed from memory here.
+ *
+ * A fourth item, "Outbound CCTP delivery has no relayer", was here through this same date and was
+ * removed once a real, testnet-proven, self-hostable outbound relayer shipped (packages/relayer/,
+ * with SDK/widget auto-registration — see ARCHITECTURE.md's Security model section for the current
+ * state, including what "closed" does and doesn't claim: it's a real, working default path, not a
+ * guaranteed delivery-time SLA, and not the same claim as mainnet production-readiness).
  */
 const OPEN_ITEMS: readonly OpenItem[] = [
-  {
-    key: "outbound-relay",
-    title: "Outbound CCTP delivery has no relayer",
-    effort: "New service",
-    description:
-      "Stellar → EVM transfers need someone to submit the completing receiveMessage call. Nothing does this automatically today. A design pass, then a build, mirroring the existing inbound relayer.",
-  },
   {
     key: "usdt0-c-address",
     title: "Inbound USDT0 to a smart-account recipient",
@@ -68,9 +67,9 @@ export function OpenSourceSection(): ReactElement {
       <Reveal variant="up" index={0} className="mt-10 max-w-4-col">
         <p className="text-text-3 text-on-surface-soft">
           Ferryline is Apache-2.0, and the core SDK and relayer will always be free to self-host. If
-          you want to help close a real gap — outbound <Mono>CCTP</Mono> delivery, smart-account
-          support for <Mono>USDT0</Mono>, or better docs — the contributing guide lists exactly
-          where we need it, with the evidence behind each item.
+          you want to help close a real gap — smart-account support for <Mono>USDT0</Mono>, or
+          better docs — the contributing guide lists exactly where we need it, with the evidence
+          behind each item.
         </p>
         <div className="mt-8 flex flex-wrap items-center gap-x-8 gap-y-4">
           <Button href={LINKS.contributing}>Contributing guide</Button>

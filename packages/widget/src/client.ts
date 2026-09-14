@@ -40,8 +40,14 @@ export interface WidgetClientConfig {
   readonly network: FerrylineNetwork;
   /** Stellar RPC endpoint. Testnet default: Soroban RPC's public testnet endpoint. */
   readonly rpcUrl?: string;
-  /** Ferryline relayer endpoint — needed for inbound (EVM -> Stellar) CCTP tracking. */
+  /** Ferryline relayer endpoint — used for BOTH inbound (EVM -> Stellar) and outbound
+   *  (Stellar -> EVM) transfer registration/tracking. Threaded straight into FerrylineConfig's own
+   *  relayerUrl (see @ferryline/sdk's index.ts) rather than kept as a widget-only concept — see
+   *  index.ts's registerInboundTransfer/registerOutboundTransfer, both of which now read this same
+   *  config from `this.client().ferryline.config` instead of building their own. */
   readonly relayerUrl?: string;
+  /** Bearer token for the relayer above, if it requires one. */
+  readonly relayerApiKey?: string;
   readonly store?: TransferStore;
 }
 
@@ -102,10 +108,11 @@ export function createWidgetClient(config: WidgetClientConfig): WidgetClient {
     network: config.network,
     rpcUrl,
     store,
-    // exactOptionalPropertyTypes forbids `relayerUrl: undefined` explicitly — the property is
-    // either present with a real string or absent entirely, matching FerrylineConfig's own
-    // `relayerUrl?: string` (never `string | undefined`).
+    // exactOptionalPropertyTypes forbids `relayerUrl: undefined`/`relayerApiKey: undefined`
+    // explicitly — each property is either present with a real string or absent entirely, matching
+    // FerrylineConfig's own `?: string` fields (never `string | undefined`).
     ...(config.relayerUrl !== undefined ? { relayerUrl: config.relayerUrl } : {}),
+    ...(config.relayerApiKey !== undefined ? { relayerApiKey: config.relayerApiKey } : {}),
   });
 
   ferryline.registerAdapter(

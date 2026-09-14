@@ -53,6 +53,7 @@ function harness(
     ceilingStroops?: bigint;
     sponsorBalance?: bigint;
     registrationLimiter?: InMemoryRegistrationLimiter;
+    corsOrigins?: readonly string[];
   } = {},
 ): Harness {
   const repo = new InMemoryTransferRepository();
@@ -76,6 +77,10 @@ function harness(
     version: "test",
     startedAt: 0,
     now: () => 5000,
+    // Fail-closed default, matching production: a test that doesn't care about CORS gets the same
+    // real "no browser origin allowed" behavior as an operator who never set FERRYLINE_CORS_ORIGINS
+    // — see the dedicated CORS describe block below for tests of the allowed-origin path itself.
+    corsOrigins: overrides.corsOrigins ?? [],
   });
   return { app, repo, apiKeys, spendCeiling, registrationLimiter };
 }
@@ -519,6 +524,83 @@ describe("GET /healthz", () => {
     const h = harness();
     const response = await h.app.inject({ method: "GET", url: "/healthz" });
     expect(response.statusCode).toBe(200);
+    await h.app.close();
+  });
+});
+
+describe("CORS: fail-closed by default, real preflight behavior when origins are configured", () => {
+  // A real, pre-existing gap found and fixed during the outbound-auto-registration phase: this
+  // relayer had NO CORS configuration at all, which silently blocks EVERY browser-based caller —
+  // confirmed directly against a real browser running the real widget against a real running
+  // relayer instance (a real preflight OPTIONS request failed with no
+  // Access-Control-Allow-Origin header, and the browser itself refused the actual POST as a
+  // result, before it ever reached this server). These tests exercise the REAL mechanism a
+  // browser depends on — a real OPTIONS preflight and the real Access-Control-Allow-Origin
+  // response header @fastify/cors computes — not just "was corsOrigins parsed correctly"
+  // (config.test.ts's own job).
+
+  it("fail-closed default: a real preflight OPTIONS request from ANY origin gets no Access-Control-Allow-Origin header when corsOrigins is unset/empty", async () => {
+    const h = harness(); // corsOrigins defaults to [] in the harness itself
+    const response = await h.app.inject({
+      method: "OPTIONS",
+      url: "/transfers",
+      headers: {
+        origin: "https://some-widget-host.example.com",
+        "access-control-request-method": "POST",
+      },
+    });
+    // @fastify/cors still answers the preflight (200/204), but WITHOUT the one header a browser
+    // actually checks before allowing the real request through — this is the real, browser-facing
+    // mechanism that blocks the request, not a 403/error response from this server.
+    expect(response.headers["access-control-allow-origin"]).toBeUndefined();
+  });
+
+  it("an ALLOWED origin's real preflight OPTIONS request gets a matching Access-Control-Allow-Origin header", async () => {
+    const h = harness({ corsOrigins: ["https://widget.example.com"] });
+    const response = await h.app.inject({
+      method: "OPTIONS",
+      url: "/transfers",
+      headers: {
+        origin: "https://widget.example.com",
+        "access-control-request-method": "POST",
+      },
+    });
+    expect(response.headers["access-control-allow-origin"]).toBe("https://widget.example.com");
+  });
+
+  it("a DIFFERENT, non-configured origin's real preflight OPTIONS request is genuinely blocked even when OTHER origins are allowed", async () => {
+    const h = harness({ corsOrigins: ["https://widget.example.com"] });
+    const response = await h.app.inject({
+      method: "OPTIONS",
+      url: "/transfers",
+      headers: {
+        origin: "https://attacker.example.com",
+        "access-control-request-method": "POST",
+      },
+    });
+    expect(response.headers["access-control-allow-origin"]).toBeUndefined();
+  });
+
+  it("the actual GET /transfers/:id response (not just the preflight) carries the real Access-Control-Allow-Origin header for an allowed origin", async () => {
+    // The preflight is what a browser sends FIRST and refuses to proceed past if it fails — but
+    // the real, substantive response also needs the header, since browsers check it there too
+    // (simple/actual requests, not just preflighted ones, still require CORS headers on the real
+    // response before JS is allowed to read it).
+    const h = harness({ corsOrigins: ["https://widget.example.com"] });
+    const row = await h.repo.register({
+      id: "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      rail: "usdc-cctp",
+      sourceChain: "ethereum",
+      sourceTxHash: VALID_TX_HASH,
+      sourceDomain: 0,
+    });
+    const response = await h.app.inject({
+      method: "GET",
+      url: `/transfers/${row.id}`,
+      headers: { origin: "https://widget.example.com" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["access-control-allow-origin"]).toBe("https://widget.example.com");
     await h.app.close();
   });
 });

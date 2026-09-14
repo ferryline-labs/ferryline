@@ -54,20 +54,24 @@ required: since Circle can silently reinterpret `1000`, a caller who explicitly 
 has an honest, auditable record of what they actually asked for. The SDK throws
 `PARAMETER_REQUIRED` if either is missing from a `usdc-cctp` request, on purpose.
 
-## Why does outbound CCTP tracking say "verified, delivering" and then just... sit there?
+## Why does outbound CCTP tracking sometimes still say "verified, delivering" and sit there?
 
-Because that's real, and it's a known, documented gap, not a bug in the widget or SDK. Circle's own
-infrastructure does not automatically submit the completing `receiveMessage` call on the
-destination chain for a Stellar-source transfer, on testnet or mainnet, confirmed directly against
-Circle's own technical guide. `receiveMessage` is permissionless by CCTP's own design, anyone,
-including the sender or recipient, can submit it and pay its small gas cost, but nothing in this
-pipeline does so automatically today. This was confirmed directly during the widget's own real
-end-to-end testing: a fully attested burn sat undelivered for about 46 minutes until it was
-completed manually. See
+Because that can still be real, though it's now the exception rather than the default. If you
+(or the widget you're using) configured a Ferryline relayer (`relayer-url`), outbound transfers
+register with it automatically once the burn confirms, and it's a real, testnet-proven,
+self-hostable service (`packages/relayer/`) that submits the completing `receiveMessage` call for
+you. If no relayer is configured, or the configured one is unavailable/misconfigured/has hit its
+own daily spend ceiling, this reverts to the original situation: Circle's own infrastructure does
+not submit `receiveMessage` automatically, on testnet or mainnet, confirmed directly against
+Circle's own technical guide, and `receiveMessage` is permissionless by CCTP's own design — anyone,
+including the sender or recipient, can submit it and pay its small gas cost. Even with a relayer
+configured, this is not a guaranteed delivery-time SLA — see
+[packages/relayer/OUTBOUND_THREAT_MODEL.md](packages/relayer/OUTBOUND_THREAT_MODEL.md) for the full
+design/risk write-up. See
 [packages/core/verified/experiments/2026-09-12-widget-e2e-real-browser-wallet.md](packages/core/verified/experiments/2026-09-12-widget-e2e-real-browser-wallet.md)
-for the full account, and `packages/widget/e2e/submit-receive-message.mjs` for a real, working
-example of completing delivery manually. Building a dedicated outbound relayer to automate this is
-real, scoped, future work, see [CONTRIBUTING.md](CONTRIBUTING.md).
+for the original finding (before the relayer existed) and `packages/widget/e2e/submit-receive-message.mjs`
+for a real, working example of completing delivery manually, which still works exactly the same way
+regardless of whether a relayer is configured.
 
 ## Can inbound USDT0 be delivered to a smart-account (C-address) recipient?
 

@@ -8,6 +8,18 @@
 # spend-cap-related ones especially: the relayer refuses to start rather than run with a silently
 # assumed default for anything that controls real money movement (see spend/config.ts). Copy
 # .env.example to .env and fill in the real values before running this.
+#
+# The outbound (Stellar -> EVM) block near the bottom is one exception to ":?"-means-required:
+# those vars use ${VAR:-} (empty-string default) here because Compose has no CONDITIONAL-required
+# syntax — they are only actually required when FERRYLINE_OUTBOUND_ENABLED=true, and the app itself
+# (src/config.ts/spend/outbound-config.ts/src/signer/env-secret-evm-signer.ts) is what enforces that
+# refusal-to-start, not Compose. Leaving FERRYLINE_OUTBOUND_ENABLED unset/false runs inbound-only,
+# exactly as it did before this direction existed.
+#
+# FERRYLINE_CORS_ORIGINS is the OTHER exception to ":?"-means-required, for a different reason:
+# it is genuinely optional even in production — a relayer with no browser-based integrator (only
+# server-to-server callers) never needs it set — and it fails CLOSED (no browser origin allowed)
+# when unset, never open/permissive. See src/config.ts's own RelayerConfig.corsOrigins doc comment.
 
 services:
   postgres:
@@ -60,6 +72,26 @@ services:
       FERRYLINE_REGISTRATION_LIMIT_MAX_ATTEMPTS: ${FERRYLINE_REGISTRATION_LIMIT_MAX_ATTEMPTS:-60}
       FERRYLINE_REGISTRATION_LIMIT_WINDOW_MS: ${FERRYLINE_REGISTRATION_LIMIT_WINDOW_MS:-60000}
       FERRYLINE_RELAYER_VERSION: ${FERRYLINE_RELAYER_VERSION:-0.0.0}
+      # Fail-closed if unset: NO browser origin is allowed cross-origin (comma-separated list, e.g.
+      # "https://your-widget-host.example.com,http://localhost:4173"). A real, pre-existing gap
+      # found and fixed during the outbound-auto-registration phase — see src/config.ts's own
+      # RelayerConfig.corsOrigins doc comment for the full story. NEVER set this to "*" here.
+      FERRYLINE_CORS_ORIGINS: ${FERRYLINE_CORS_ORIGINS:-}
+      # --- Outbound (Stellar -> EVM) direction: opt-in, defaults to disabled. Every var below this
+      # line is read but UNUSED (and never required) unless FERRYLINE_OUTBOUND_ENABLED=true — see
+      # src/config.ts's outboundEnabled/loadOutboundRelayerConfig and README.md's own outbound
+      # section for the full explanation of why this direction is opt-in per deployment. ---
+      FERRYLINE_OUTBOUND_ENABLED: ${FERRYLINE_OUTBOUND_ENABLED:-false}
+      FERRYLINE_OUTBOUND_DESTINATION_CHAIN: ${FERRYLINE_OUTBOUND_DESTINATION_CHAIN:-}
+      FERRYLINE_OUTBOUND_EVM_RPC_URL: ${FERRYLINE_OUTBOUND_EVM_RPC_URL:-}
+      FERRYLINE_OUTBOUND_SPONSOR_SECRET: ${FERRYLINE_OUTBOUND_SPONSOR_SECRET:-}
+      FERRYLINE_OUTBOUND_MAX_GAS_WEI: ${FERRYLINE_OUTBOUND_MAX_GAS_WEI:-}
+      FERRYLINE_OUTBOUND_DAILY_GAS_CEILING_WEI: ${FERRYLINE_OUTBOUND_DAILY_GAS_CEILING_WEI:-}
+      FERRYLINE_OUTBOUND_MAX_TRANSFERS_PER_RECIPIENT: ${FERRYLINE_OUTBOUND_MAX_TRANSFERS_PER_RECIPIENT:-}
+      FERRYLINE_OUTBOUND_RECIPIENT_RATE_LIMIT_WINDOW_MS: ${FERRYLINE_OUTBOUND_RECIPIENT_RATE_LIMIT_WINDOW_MS:-}
+      FERRYLINE_OUTBOUND_POLL_INTERVAL_MS: ${FERRYLINE_OUTBOUND_POLL_INTERVAL_MS:-2000}
+      FERRYLINE_OUTBOUND_POLL_MAX_INTERVAL_MS: ${FERRYLINE_OUTBOUND_POLL_MAX_INTERVAL_MS:-30000}
+      FERRYLINE_OUTBOUND_MAX_CONCURRENT_TRANSFERS: ${FERRYLINE_OUTBOUND_MAX_CONCURRENT_TRANSFERS:-20}
 
 volumes:
   ferryline-postgres-data:

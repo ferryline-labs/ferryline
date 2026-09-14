@@ -6,7 +6,21 @@
   </head>
   <body>
     <h1>Ferryline Widget — real browser-wallet E2E host</h1>
-    <ferryline-widget id="widget" network="testnet"></ferryline-widget>
+    <!--
+      relayer-url/relayer-api-key are set here for the outbound-auto-registration real browser
+      proof (STEP 4): point relayer-url at a real, running relayer instance (see
+      packages/relayer/README.md) with FERRYLINE_CORS_ORIGINS including this page's own origin
+      (http://localhost:4173 for this dev server), and relayer-api-key at a real key inserted into
+      that instance's api_keys table. Leave both attributes off entirely to exercise the
+      no-relayer-configured path instead (the widget's own delivery-caveat text reflects whichever
+      case is active).
+    -->
+    <ferryline-widget
+      id="widget"
+      network="testnet"
+      relayer-url="http://localhost:8080"
+      relayer-api-key="REPLACE_WITH_A_REAL_RELAYER_API_KEY"
+    ></ferryline-widget>
     <script type="module" src="./harness.ts"></script>
   </body>
 </html>

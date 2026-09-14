@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { loadRelayerConfig } from "./config.js";
+import { loadOutboundRelayerConfig, loadRelayerConfig, outboundEnabled } from "./config.js";
 
 function validEnv(): NodeJS.ProcessEnv {
   return {
@@ -24,6 +24,52 @@ describe("loadRelayerConfig", () => {
       maxConcurrentTransfers: 20,
       registrationLimitMaxAttempts: 60,
       registrationLimitWindowMs: 60_000,
+      // Fail-closed default: NO browser origin allowed when FERRYLINE_CORS_ORIGINS is unset — see
+      // RelayerConfig.corsOrigins's own doc comment for why this is the safe default, not `["*"]`.
+      corsOrigins: [],
+    });
+  });
+
+  describe("corsOrigins", () => {
+    it("is an empty array (fail-closed) when FERRYLINE_CORS_ORIGINS is unset", () => {
+      expect(loadRelayerConfig(validEnv()).corsOrigins).toEqual([]);
+    });
+
+    it("is an empty array when FERRYLINE_CORS_ORIGINS is set to an empty or whitespace-only string", () => {
+      expect(loadRelayerConfig({ ...validEnv(), FERRYLINE_CORS_ORIGINS: "" }).corsOrigins).toEqual(
+        [],
+      );
+      expect(
+        loadRelayerConfig({ ...validEnv(), FERRYLINE_CORS_ORIGINS: "   " }).corsOrigins,
+      ).toEqual([]);
+    });
+
+    it("parses a single real origin", () => {
+      expect(
+        loadRelayerConfig({
+          ...validEnv(),
+          FERRYLINE_CORS_ORIGINS: "https://app.example.com",
+        }).corsOrigins,
+      ).toEqual(["https://app.example.com"]);
+    });
+
+    it("parses multiple comma-separated origins, trimming whitespace around each", () => {
+      expect(
+        loadRelayerConfig({
+          ...validEnv(),
+          FERRYLINE_CORS_ORIGINS:
+            "https://app.example.com, http://localhost:4173 ,https://widget.example.com",
+        }).corsOrigins,
+      ).toEqual(["https://app.example.com", "http://localhost:4173", "https://widget.example.com"]);
+    });
+
+    it("drops empty entries from trailing/doubled commas rather than keeping an empty-string origin", () => {
+      expect(
+        loadRelayerConfig({
+          ...validEnv(),
+          FERRYLINE_CORS_ORIGINS: "https://app.example.com,,",
+        }).corsOrigins,
+      ).toEqual(["https://app.example.com"]);
     });
   });
 
@@ -61,6 +107,65 @@ describe("loadRelayerConfig", () => {
       maxConcurrentTransfers: 5,
       registrationLimitMaxAttempts: 10,
       registrationLimitWindowMs: 30_000,
+    });
+  });
+});
+
+describe("outboundEnabled", () => {
+  it("is false when FERRYLINE_OUTBOUND_ENABLED is unset — outbound is opt-in, not inferred", () => {
+    expect(outboundEnabled({})).toBe(false);
+  });
+
+  it('is false for anything other than the exact string "true" (no truthy-string guessing)', () => {
+    for (const value of ["1", "yes", "True", "TRUE", " true", "true "]) {
+      expect(outboundEnabled({ FERRYLINE_OUTBOUND_ENABLED: value }), `value=${value}`).toBe(false);
+    }
+  });
+
+  it('is true when FERRYLINE_OUTBOUND_ENABLED is exactly "true"', () => {
+    expect(outboundEnabled({ FERRYLINE_OUTBOUND_ENABLED: "true" })).toBe(true);
+  });
+});
+
+function validOutboundEnv(): NodeJS.ProcessEnv {
+  return {
+    FERRYLINE_OUTBOUND_DESTINATION_CHAIN: "ethereum-sepolia",
+    FERRYLINE_OUTBOUND_EVM_RPC_URL: "https://sepolia.example.com",
+  };
+}
+
+describe("loadOutboundRelayerConfig", () => {
+  it("succeeds with just the two genuinely required vars, using documented defaults for the rest", () => {
+    const config = loadOutboundRelayerConfig(validOutboundEnv());
+    expect(config).toEqual({
+      destinationChain: "ethereum-sepolia",
+      evmRpcUrl: "https://sepolia.example.com",
+      pollIntervalMs: 2000,
+      pollMaxIntervalMs: 30_000,
+      maxConcurrentTransfers: 20,
+    });
+  });
+
+  it.each(["FERRYLINE_OUTBOUND_DESTINATION_CHAIN", "FERRYLINE_OUTBOUND_EVM_RPC_URL"] as const)(
+    "throws when %s is unset",
+    (name) => {
+      const env = validOutboundEnv();
+      delete env[name];
+      expect(() => loadOutboundRelayerConfig(env)).toThrow(new RegExp(`${name} is required`));
+    },
+  );
+
+  it("honors an explicit override for every performance/load knob", () => {
+    const config = loadOutboundRelayerConfig({
+      ...validOutboundEnv(),
+      FERRYLINE_OUTBOUND_POLL_INTERVAL_MS: "500",
+      FERRYLINE_OUTBOUND_POLL_MAX_INTERVAL_MS: "5000",
+      FERRYLINE_OUTBOUND_MAX_CONCURRENT_TRANSFERS: "5",
+    });
+    expect(config).toMatchObject({
+      pollIntervalMs: 500,
+      pollMaxIntervalMs: 5000,
+      maxConcurrentTransfers: 5,
     });
   });
 });

@@ -1,7 +1,12 @@
 # Ferryline outbound CCTP relayer (Stellar → EVM) — threat model, STEP 1
 
-Status: **design only. No implementation exists.** This is the pre-code sign-off for a new,
-standalone relaying service.
+Status: **implemented, tested, and testnet-proven with a real Sepolia transaction** — this was the
+pre-code sign-off for what became a real, running service (`packages/relayer/src/work/outbound-*`
+and siblings); kept as written at design time rather than rewritten after the fact, since it's the
+real document that governed the build. See "Open questions needing sign-off before implementation
+starts" near the end of this file for which option was actually chosen for each open decision, and
+`packages/relayer/README.md`'s own "Outbound (Stellar -> EVM)" section for the real, current
+env vars/API/behavior this design produced.
 
 **Explicit note on the format choice below, checked directly rather than assumed**: this document
 uses the router's CURRENT, matured `THREAT_MODEL.md`'s three-part STRIDE-outline shape
@@ -290,9 +295,29 @@ registration step providing it.
 
 ## Open questions needing sign-off before implementation starts
 
+**RESOLVED — real decisions actually made and implemented, recorded here rather than reconstructed
+from memory:**
+
+1. **Package boundary** → Option A, new modules inside `packages/relayer` (confirmed: real code
+   lives in `packages/relayer/src/work/outbound-*.ts` and sibling files, not a separate package).
+2. **Widget/SDK wiring** → Option A, automatic registration. `packages/sdk/src/index.ts`'s
+   `Ferryline.registerOutboundTransfer` fires once a transfer's final build step confirms (see that
+   method's own doc comment, and `isFinalStep`, both in the same file, for why "final step" matters
+   — an earlier version of this wiring fired on every step and had to be fixed). The widget calls it
+   automatically from its own `afterStepSubmitted`; a raw SDK integrator calls it explicitly at the
+   same point. Gated entirely by whether a relayer is configured (`FerrylineConfig.relayerUrl`) —
+   an integrator with none configured is unaffected, per this question's own original reasoning.
+3. **Destination chain** → Ethereum Sepolia, exactly as anticipated, confirmed via a real,
+   independently-verified Sepolia transaction (see `packages/core/verified/experiments/` for the
+   real burn/delivery tx hashes).
+4. **Traffic bypassing the widget/SDK** → still genuinely open; nothing resolved this by
+   construction (the relayer's own `POST /outbound-transfers` accepts any caller with a valid API
+   key, whether or not it came from `@ferryline/sdk`).
+5. **EVM RPC/library choice** → viem, as anticipated (a non-decision, confirmed correct).
+
 Each of these has a real decision behind it, not just a label — worked through here with the
 actual options, what each implies, and where I land, so sign-off means agreeing with a real
-argument, not just a name.
+argument, not just a name. (Original, pre-decision reasoning preserved below for the record.)
 
 ### 1. Package boundary: new modules inside `packages/relayer`, or a genuinely new package?
 
