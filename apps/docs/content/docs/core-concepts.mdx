@@ -68,6 +68,16 @@ Calling this before the approve is actually confirmed throws `ALLOWANCE_INSUFFIC
 for the wrong step index throws `STEP_NOT_READY`. This two-step shape only exists for CCTP —
 USDT0's `send()` handles its own allowance differently and never produces a deferred step.
 
+### Opting an outbound transfer into automatic delivery
+
+For an **outbound** (Stellar→EVM) CCTP transfer specifically, there's one more real call worth
+knowing about: once you've called `markSubmitted` on the transfer's final step, call
+`ferryline.registerOutboundTransfer(transferId)` to register it with a configured relayer for
+automatic delivery. `isFinalStep(built, stepIndex)` (also exported) is the real, canonical way to
+find that point. See [SDK Reference](/docs/sdk-reference#registeroutboundtransfer) for the exact
+method and its timing rule, and the [end-to-end walkthrough](/docs/bridge-walkthrough) for it used
+in a real, complete transfer.
+
 ## Three problems, solved once
 
 **Decimals.** Stellar assets carry 7 decimal places (`STELLAR_DECIMALS`); CCTP messages and the
@@ -82,14 +92,20 @@ transfer fails outright with no automatic retry. This is one of the checks `quot
 you commit to anything — a failed `recipient-trustline` check comes back with a `remedy` telling
 the caller what to do about it (add the trustline), not just that something's wrong.
 
-**Inbound delivery.** CCTP has no automatic delivery on Stellar: Circle's own CCTP documentation
-says plainly that an API consumer must query the attestation and submit it onchain to the
-destination domain itself. For EVM→Stellar transfers, the [self-hosted relayer](/docs/relayer)
-does exactly that on your behalf. For **outbound** (Stellar→EVM) transfers, there is currently no
-equivalent automatic relay in this project at all — the destination-chain `receiveMessage` call
-has to be submitted by the sender, the recipient, or their own infrastructure. Don't assume a
-Stellar-to-EVM transfer completes itself; `track()` will keep reporting `verified` (attested, not
-yet delivered) until someone actually submits that call.
+**Delivery.** CCTP has no automatic delivery by default in either direction: Circle's own CCTP
+documentation says plainly that an API consumer must query the attestation and submit it onchain to
+the destination domain itself. Ferryline closes that gap with a self-hosted relayer
+(`packages/relayer/`) for **both** directions now — inbound (EVM→Stellar) has had one from the
+start, and outbound (Stellar→EVM) gained a real, testnet-proven one too, opt-in per deployment.
+`registerOutboundTransfer()`/`isFinalStep()` (above) are what opt an outbound transfer into it.
+That said, don't treat automatic delivery as a guarantee in either direction: `receiveMessage`/
+`mint_and_forward` remain genuinely permissionless by CCTP's own design, so if no relayer is
+configured — or the configured one is unavailable, misconfigured, or has hit its own daily spend
+ceiling — delivery doesn't complete itself, and `track()` will keep reporting `verified` (attested,
+not yet delivered) until someone actually submits that call, manually if needed. See
+[Relayer](/docs/relayer) for self-hosting one, and the
+[end-to-end walkthrough](/docs/bridge-walkthrough) for both the automatic and manual paths, with
+real transaction hashes for each.
 
 ## Why `maxFee` and `minFinalityThreshold` have no default
 

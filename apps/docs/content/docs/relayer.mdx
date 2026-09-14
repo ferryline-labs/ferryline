@@ -1,38 +1,38 @@
 ---
 title: Relayer
-description: The self-hosted service that completes inbound EVM→Stellar CCTP transfers — Docker Compose setup, environment variables, and the three HTTP endpoints.
+description: The self-hosted service that completes CCTP transfers in both directions (inbound and outbound) — Docker Compose setup, environment variables, CORS, and the HTTP API.
 ---
 
-`ferryline-relayer` (`packages/relayer`) is a self-hosted Node service that completes **inbound**
-CCTP transfers — USDC moving from an EVM chain to Stellar. It watches the source burn transaction,
-polls Circle's Iris for the attestation, and once the message is verified, builds and pays for the
-`mint_and_forward` call on Stellar itself, fee-bumping it from its own sponsor account so the
-recipient never needs XLM to receive the transfer. As its own README puts it:
+`ferryline-relayer` (`packages/relayer`) is a self-hosted Node service that completes CCTP
+transfers in **two independent directions**, run in the same process:
 
-> Completes CCTP-to-Stellar transfers on the sender's behalf: watches Circle's Iris for
-> attestation, builds and sponsors the `mint_and_forward` call, and confirms delivery.
+- **Inbound (EVM → Stellar)** — watches the source burn transaction, polls Circle's Iris for the
+  attestation, and once the message is verified, builds and pays for the `mint_and_forward` call on
+  Stellar itself, fee-bumping it from its own sponsor account so the recipient never needs XLM to
+  receive the transfer.
+- **Outbound (Stellar → EVM)** — the mirror image: watches a Stellar-source burn, polls Iris for
+  its attestation, and once verified, submits and pays for the `receiveMessage` call on the
+  destination EVM chain, from its own EVM sponsor account.
 
-This exists because CCTP itself has no automatic delivery on Stellar — see
+As the README's own opening line puts it: "Completes CCTP transfers on the sender's behalf, in two
+independent directions." Outbound is real, testnet-proven (a real Sepolia `receiveMessage`
+transaction), and **opt-in per deployment** — `FERRYLINE_OUTBOUND_ENABLED=true` — not the default,
+since a deployment that only wants inbound shouldn't be forced to configure an EVM signer/RPC/spend
+caps it will never use.
+
+This exists because CCTP itself has no automatic delivery on either end by default — see
 [Core Concepts](/docs/core-concepts#three-problems-solved-once) for why an API consumer has to
-submit the attestation onchain themselves. The relayer is that submitter, running continuously so
-nobody else has to.
+submit the attestation onchain themselves. The relayer is that submitter, running continuously in
+whichever direction(s) you enable, so nobody else has to.
 
-## What it doesn't do
+The rail scope is still narrow on purpose: the relayer's own `SUPPORTED_RAILS` (in
+`src/http/schemas.ts`) is `["usdc-cctp"]` only, with a one-line reason attached — `usdt0-layerzero`
+never needs a relayer, because "LayerZero's own executor delivers it." That hasn't changed; only
+the CCTP side gained a second direction.
 
-The relayer only ever drives the `pending → attested → submitting → delivered` path for CCTP
-transfers whose source chain is an EVM chain. It does not touch **outbound** (Stellar→EVM)
-transfers at all. [Core Concepts](/docs/core-concepts#three-problems-solved-once) says this
-plainly:
-
-> For **outbound** (Stellar→EVM) transfers, there is currently no equivalent automatic relay in
-> this project at all — the destination-chain `receiveMessage` call has to be submitted by the
-> sender, the recipient, or their own infrastructure.
-
-If you're sending Stellar→EVM, that submission is on you (or your own infrastructure) via the
-[Router](/docs/router) contract directly — there's no relayer-side help for that direction today.
-The relayer's own `SUPPORTED_RAILS` (in `src/http/schemas.ts`) is `["usdc-cctp"]` only, with a
-one-line reason attached: `usdt0-layerzero` never needs a relayer, because "LayerZero's own
-executor delivers it."
+For the full design reasoning behind the outbound direction specifically, see the relayer's own
+`OUTBOUND_SCOPE.md` and `OUTBOUND_THREAT_MODEL.md` (`packages/relayer/`) — real, current, detailed
+design docs this page draws from but doesn't fully reproduce.
 
 ## The security property: amount and recipient are never trusted from the caller
 
@@ -75,6 +75,56 @@ separate limits, checked at two different points, and only one of them is a per-
   verified from the on-chain message. A recipient over this limit gets a terminal
   `errorCode: "RECIPIENT_RATE_LIMITED"` on that transfer's row, distinct from every other failure
   reason — check `GET /transfers/:id`, not the registration response, to see it.
+
+## Outbound (Stellar → EVM)
+
+Outbound registration mirrors inbound closely, with the source/destination sides swapped. Once
+you've submitted a Stellar-source CCTP burn (directly, or via `@ferryline/sdk`'s
+`UsdcCctpAdapter`), you register it with the relayer — either yourself, or automatically, since
+`@ferryline/sdk`'s `Ferryline.registerOutboundTransfer()` and `@ferryline/widget` both call this
+endpoint for you once the burn's final step confirms (see [SDK Reference](/docs/sdk-reference)).
+
+### `POST /outbound-transfers`
+
+Same security property as inbound: only `transferId`, `sourceTxHash`, `destinationChain`, and
+`rail` are accepted — never `amount`/`recipient`, which are extracted later from the verified Iris
+message, exactly the same reasoning as `POST /transfers`. `sourceDomain` isn't accepted either;
+it's always Stellar's own CCTP domain (27 on both networks), derived server-side.
+
+| Field              | Type   | Validation                                                                                                                                             |
+| ------------------ | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `transferId`       | string | Valid ULID, same `isTransferId` check as inbound.                                                                                                      |
+| `sourceTxHash`     | string | 64 lowercase hex characters, **no `0x` prefix** — the real Stellar transaction-hash format, genuinely different from inbound's `0x`-prefixed EVM hash. |
+| `destinationChain` | string | Must resolve via `cctpEvmChain` for the relayer's configured network.                                                                                  |
+| `rail`             | string | Must be `"usdc-cctp"`.                                                                                                                                 |
+
+Responses: `201` (`{ id, status: "pending", sourceChain: "stellar", sourceTxHash, destinationChain }`),
+`409` (duplicate `sourceTxHash`), `429` (registration rate limit — **shared with inbound**: one
+`api_keys` table, one registration-time limiter across both directions, not a separate budget per
+direction). Requires the same `Authorization: Bearer <key>` as inbound.
+
+### `GET /outbound-transfers/:id`
+
+The outbound mirror of `GET /transfers/:id` — same no-auth reasoning (an unguessable ULID-keyed
+read with no spend-related side effect), same response shape (`id`, `rail`, `status`,
+`sourceChain`, `sourceTxHash`, `sourceDomain`, `destinationChain`, `destinationTxHash`, `amount`,
+`recipient`, `errorCode`, `errorDetail`, `version`, `createdAt`, `updatedAt`), same status
+progression: `pending` → `attested` (message verified, `amount`/`recipient` populated) →
+`submitting` (real `receiveMessage` broadcast, destination tx hash recorded) → `delivered`.
+
+### Honest limits, not overclaimed
+
+- **Not a guaranteed delivery-time SLA.** `receiveMessage` remains genuinely permissionless by
+  CCTP's own design — if the relayer is unavailable, misconfigured, or its own daily gas ceiling is
+  exhausted, delivery doesn't happen automatically. Anyone (sender, recipient, another relayer) can
+  still complete it manually at any time; that's the same real fallback that existed before this
+  relayer's outbound direction shipped, not a new one — see the
+  [end-to-end walkthrough](/docs/bridge-walkthrough) for the real manual code path.
+- **One destination chain per running instance.** `FERRYLINE_OUTBOUND_DESTINATION_CHAIN` is
+  singular — multi-chain outbound is deferred future work, not silently supported.
+- **Push-only registration.** The relayer doesn't watch Stellar itself for burns; a caller who
+  never registers a transfer (e.g. one that bypasses `@ferryline/sdk`/the widget entirely) gets no
+  automatic delivery. This is a real, open question in `OUTBOUND_SCOPE.md`, not glossed over here.
 
 ## Self-hosting with Docker Compose
 
@@ -149,8 +199,10 @@ now populated) → `submitting` (fee-bump broadcast) → `delivered`.
 
 ## Environment variables
 
-`src/config.ts` and `src/spend/config.ts` load exactly 15 environment variables between them.
-`config.ts`'s own doc comment draws the line precisely:
+`src/config.ts` and `src/spend/config.ts` load the inbound/always-on variables; outbound adds its
+own set, in `src/config.ts`'s `loadOutboundRelayerConfig` and `src/spend/outbound-config.ts`,
+loaded only when `FERRYLINE_OUTBOUND_ENABLED=true`. `config.ts`'s own doc comment draws the
+non-spend/spend line precisely:
 
 > Kept separate from `spend/config.ts`'s `SpendConfig`, which has its own stricter "no defaults,
 > ever" rule for money-related values — these values are allowed sensible defaults (a poll
@@ -189,12 +241,53 @@ inconvenience, not a money-safety issue (`config.ts`):**
 | `FERRYLINE_REGISTRATION_LIMIT_WINDOW_MS`    | `60000`   | That same brake's rolling window, in milliseconds.                        |
 | `FERRYLINE_RELAYER_VERSION`                 | `0.0.0`   | Reported verbatim in `GET /healthz`'s `version` field.                    |
 
-That's all 15. Two more variables matter for self-hosting but live outside these two files:
+**Optional, CORS (`config.ts`) — fail-closed, not fail-open:**
 
-- **`FERRYLINE_SPONSOR_SECRET`** — required, no default, loaded in `src/signer/env-secret-signer.ts`
-  rather than either config file. It's the sponsor account's Stellar secret seed (`S...`); every
-  `mint_and_forward` fee-bump is signed and paid for by this account. The README is blunt about it:
-  "Never a default, never a silently-generated throwaway key." Never commit this value.
+| Variable                 | Default                                         | Purpose                                                                                                                                                                                              |
+| ------------------------ | ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FERRYLINE_CORS_ORIGINS` | unset → `[]` (**no origin allowed**, never `*`) | Comma-separated list of browser origins allowed to call this relayer cross-origin — e.g. the page hosting `<ferryline-widget>`, if it runs on a different origin than the relayer (the normal case). |
+
+Leaving this unset is safe — server-to-server callers (`curl`, scripts, another backend) are never
+subject to CORS in the first place — but it silently blocks every _browser-based_ caller with no
+server-side error to point at, since the browser itself refuses the request before it ever reaches
+this process. If a browser-based integrator (the widget included) calls this relayer directly, set
+this explicitly. Never set it to `"*"`.
+
+**Required only when `FERRYLINE_OUTBOUND_ENABLED=true` (`config.ts`'s `loadOutboundRelayerConfig`,
+non-spend):**
+
+| Variable                                      | Default        | Purpose                                                                                                           |
+| --------------------------------------------- | -------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `FERRYLINE_OUTBOUND_DESTINATION_CHAIN`        | none, required | The one destination EVM chain this instance serves (e.g. `"ethereum-sepolia"`) — single-chain-per-instance in v1. |
+| `FERRYLINE_OUTBOUND_EVM_RPC_URL`              | none, required | The destination chain's own JSON-RPC endpoint.                                                                    |
+| `FERRYLINE_OUTBOUND_POLL_INTERVAL_MS`         | `2000`         | Same backoff shape as the inbound poll interval, mirrored for outbound.                                           |
+| `FERRYLINE_OUTBOUND_POLL_MAX_INTERVAL_MS`     | `30000`        | Ceiling for that backoff.                                                                                         |
+| `FERRYLINE_OUTBOUND_MAX_CONCURRENT_TRANSFERS` | `20`           | Same concurrency cap, mirrored for outbound.                                                                      |
+
+**Required only when outbound is enabled — spend-related (`spend/outbound-config.ts`), same "no
+defaults, ever" rule as the inbound spend vars, units in wei not stroops:**
+
+| Variable                                            | Purpose                                                                         |
+| --------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `FERRYLINE_OUTBOUND_MAX_GAS_WEI`                    | Max wei spent on gas for a single `receiveMessage` call.                        |
+| `FERRYLINE_OUTBOUND_DAILY_GAS_CEILING_WEI`          | Max total wei spent on gas per UTC calendar day, across all outbound transfers. |
+| `FERRYLINE_OUTBOUND_MAX_TRANSFERS_PER_RECIPIENT`    | Outbound's own per-recipient rate limit threshold.                              |
+| `FERRYLINE_OUTBOUND_RECIPIENT_RATE_LIMIT_WINDOW_MS` | That limit's rolling window, in milliseconds.                                   |
+
+Deliberately **not** the same config type as the inbound spend vars, even though the shape is
+similar — the units genuinely differ (wei vs. stroops), so a Stellar fee-bump cap and an EVM gas
+cap can be configured independently rather than one number meaning two different things.
+
+Two more variables matter for self-hosting but live outside all of the above:
+
+- **`FERRYLINE_SPONSOR_SECRET`** — required, no default, loaded in `src/signer/env-secret-signer.ts`.
+  It's the sponsor account's Stellar secret seed (`S...`); every `mint_and_forward` fee-bump is
+  signed and paid for by this account. The README is blunt about it: "Never a default, never a
+  silently-generated throwaway key." Never commit this value.
+- **`FERRYLINE_OUTBOUND_SPONSOR_SECRET`** — the outbound mirror, required only when outbound is
+  enabled, loaded in `src/signer/env-secret-evm-signer.ts`. A `0x`-prefixed 32-byte hex EVM private
+  key; every `receiveMessage` gas payment is signed by this account. Same "never a default, never
+  commit this" treatment.
 - **`POSTGRES_PASSWORD`** (Docker Compose only, required) and **`POSTGRES_HOST_PORT`** (Docker
   Compose only, default `5432`) — read directly by `docker-compose.yml`, not by the relayer's own
   Node process. `POSTGRES_PASSWORD` is shared between the `postgres` and `relayer` services in the
@@ -304,23 +397,41 @@ Response `200`:
 | `dailySpend.ceilingStroops`    | `string`              | Echoes `FERRYLINE_DAILY_SPEND_CEILING_STROOPS`.                                 |
 | `dailySpend.ceilingReached`    | `boolean`             | `spentStroops >= ceilingStroops`.                                               |
 
+When outbound is configured, the response gains an optional `outbound` object — omitted entirely
+(not `null`) if this process doesn't have the outbound direction running:
+
+| Field                                | Type             | Notes                                                                        |
+| ------------------------------------ | ---------------- | ---------------------------------------------------------------------------- |
+| `outbound.destinationChain`          | `string`         | Echoes `FERRYLINE_OUTBOUND_DESTINATION_CHAIN`.                               |
+| `outbound.sponsor.address`           | `string`         | The EVM sponsor's address, derived from `FERRYLINE_OUTBOUND_SPONSOR_SECRET`. |
+| `outbound.sponsor.nativeBalanceWei`  | `string \| null` | Wei, as a string; `null` if unknown.                                         |
+| `outbound.sponsor.balanceUnknown`    | `boolean`        | `true` if the RPC call failed.                                               |
+| `outbound.dailySpend.spentWei`       | `string`         | Actual confirmed gas spend so far today (UTC).                               |
+| `outbound.dailySpend.ceilingWei`     | `string`         | Echoes `FERRYLINE_OUTBOUND_DAILY_GAS_CEILING_WEI`.                           |
+| `outbound.dailySpend.ceilingReached` | `boolean`        | `spentWei >= ceilingWei`.                                                    |
+
+## CORS
+
+Real, current, and fail-closed by default — see the [environment variables](#environment-variables)
+table above for `FERRYLINE_CORS_ORIGINS`. Registered before any route in `src/http/app.ts` via
+`@fastify/cors`. Worth stating plainly since this used to be a real gap this project found and
+fixed: leaving it unset doesn't fail open — it produces an empty allow-list, so every browser-based
+caller is silently blocked by the browser itself (not a server error you can find in the relayer's
+own logs) until you set it. Server-to-server callers are unaffected either way.
+
 ## Operational caveats
 
 These are real limitations of the current implementation, not softened for the docs:
 
-- **No CORS support anywhere on this API.** There is no CORS middleware, header, or policy of any
-  kind registered on the Fastify app — a grep for `cors` (case-insensitive) across
-  `packages/relayer/src` returns zero hits. If you need to call this API directly from a browser on
-  a different origin, you'll need to put your own reverse proxy or CORS layer in front of it; the
-  relayer itself won't send the headers a browser needs.
-- **No framework-level rate limiting on the two unauthenticated GET routes.** `GET /transfers/:id`
-  and `GET /healthz` have no rate limiting registered at the Fastify level. The one rate limit that
-  exists (`registrationLimiter`) is checked only inside the `POST /transfers` handler, after
-  auth — it does nothing for either GET route. Both reads are individually cheap (an indexed lookup
-  and a live balance read, respectively), but nothing here stops a caller from hitting either one
-  as fast as they like; if that matters for your deployment, put a rate limiter in front at the
+- **No framework-level rate limiting on the unauthenticated GET routes.** `GET /transfers/:id`,
+  `GET /outbound-transfers/:id`, and `GET /healthz` have no rate limiting registered at the Fastify
+  level. The one rate limit that exists (`registrationLimiter`) is checked only inside the two
+  `POST` handlers, after auth — it does nothing for any GET route. Each read is individually cheap
+  (an indexed lookup or a live balance read), but nothing here stops a caller from hitting one as
+  fast as they like; if that matters for your deployment, put a rate limiter in front at the
   proxy/gateway layer.
-- **The auth system is deliberately MVP.** `src/http/auth.ts` says so directly:
+- **The auth system is deliberately MVP, and shared across both directions.** `src/http/auth.ts`
+  says so directly:
 
   > MVP bearer-token allow-list. Per the phase-3 sign-off, this is deliberately NOT a full auth
   > system: no sessions, no scopes, no key rotation UI — just enough to gate who the sponsor
@@ -330,30 +441,36 @@ These are real limitations of the current implementation, not softened for the d
   there's no admin endpoint to create, list, or revoke them — see
   [Bootstrapping your first API key](#bootstrapping-your-first-api-key) above, which is `psql`
   or nothing today. There's no key rotation flow either; revoking a key means setting its
-  `revoked_at` column directly. If you need real multi-tenant auth, session scoping, or a
-  self-service key-management UI, this isn't that yet — treat it as exactly what it says it is,
-  a gate on who the sponsor account pays gas for.
+  `revoked_at` column directly. One `api_keys` table and one registration-time limiter cover
+  **both** `POST /transfers` and `POST /outbound-transfers` — a key rate-limited on one direction
+  is rate-limited on both, by design, not because the two directions were never distinguished. If
+  you need real multi-tenant auth, session scoping, or a self-service key-management UI, this isn't
+  that yet — treat it as exactly what it says it is, a gate on who the sponsor accounts pay gas for.
 
 ## Where to go next
 
 - [Core Concepts](/docs/core-concepts) — the two rails, the transfer lifecycle, and why CCTP's
-  inbound-delivery gap exists in the first place.
-- [Router](/docs/router) — the Soroban contract this relayer calls into (`mint_and_forward`), and
-  what a sender submits directly for outbound transfers.
+  delivery gap exists in the first place.
+- [SDK Reference](/docs/sdk-reference) — `registerOutboundTransfer()`/`isFinalStep()`, the SDK-side
+  calls that register an outbound transfer with this relayer automatically.
+- [Router](/docs/router) — the Soroban contract a Stellar-source burn calls into.
 - [Security & Verification](/docs/security) — the project-wide findings that shaped decisions like
   the ones documented on this page.
 
 ## A note on what this page couldn't verify
 
-This page is grounded entirely in `packages/relayer`'s own README, Docker Compose/Dockerfile setup,
-`.env.example`, and the source files that define its config and HTTP layer (`config.ts`,
-`spend/config.ts`, `http/app.ts`, `http/routes/*.ts`, `http/schemas.ts`, `http/auth.ts`,
-`spend/registration-limit.ts`) — all read directly for this page. Two things worth flagging rather
-than glossing over: first, the exact Fastify request-lifecycle ordering between schema validation
-and the `requireApiKey` preHandler is described by the route's own source comment
+This page is grounded in `packages/relayer`'s own README, `OUTBOUND_SCOPE.md`,
+`OUTBOUND_THREAT_MODEL.md`, Docker Compose/Dockerfile setup, `.env.example`, and the source files
+that define its config and HTTP layer for both directions (`config.ts`, `spend/config.ts`,
+`spend/outbound-config.ts`, `http/app.ts`, `http/routes/*.ts`, `http/schemas.ts`,
+`http/outbound-schemas.ts`, `http/auth.ts`, `spend/registration-limit.ts`,
+`signer/env-secret-evm-signer.ts`) — all read directly for this page (this page was rewritten once
+already, against real, current `origin/main`, after an earlier draft was found to have been written
+against a commit that predated the outbound direction and CORS support entirely — see the earlier
+draft's own now-corrected claims if you're diffing history). Two things worth flagging rather than
+glossing over: first, the exact Fastify request-lifecycle ordering between schema validation and
+the `requireApiKey` preHandler is described by the route's own source comment
 (`http/routes/register-transfer.ts`) rather than independently verified against Fastify's lifecycle
-docs here — the practical effect (an unauthenticated or malformed request never reaches the
-database) is the same either way, but the exact hook ordering isn't something this page confirmed
-independently. Second, this page did not run the Docker Compose stack or hit a live endpoint in the
+docs here. Second, this page did not run the Docker Compose stack or hit a live endpoint in the
 course of writing it — every request/response example here is copied verbatim from the README or
 derived directly from the zod schemas in source, not captured from a running instance.

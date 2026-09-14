@@ -51,10 +51,12 @@ transfer, with real transaction hashes.
 
 ## A note on what's genuinely verified
 
-Ferryline's own tests are real and current as of this writing: 60 in `@ferryline/core`, 83 in
-`@ferryline/sdk`, 116 in the relayer (98 unit + 18 Postgres integration), 34 in the widget, and 29
-in the Soroban router — 322 in total, run against real testnet transactions where the claim is
-about on-chain behavior, not just mocked. That doesn't mean everything works: the USDT0/LayerZero
+Ferryline's own tests are real and current as of this writing (independently re-run for
+[Security & Verification](/docs/security), not carried from an older count): 60 in
+`@ferryline/core`, 91 in `@ferryline/sdk`, roughly 233 in the relayer (196 unit + an estimated ~37
+Postgres integration), 35 in the widget, and 32 in the Soroban router — over 440 in total, run
+against real testnet transactions where the claim is about on-chain behavior, not just mocked.
+That doesn't mean everything works: the USDT0/LayerZero
 rail has no Stellar testnet deployment at all (it's mainnet-only), and a few specific behaviors are
 explicitly flagged as unverified throughout this documentation rather than glossed over. Where a
 page says something is unverified, take that literally — it means exactly that, not "unlikely."

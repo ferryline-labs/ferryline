@@ -4,8 +4,10 @@ description: Real, specific answers pulled from this project's own source, tests
 ---
 
 This page answers questions that come up from reading the code and the project's own verification
-documents, not generic open-source boilerplate. Where an answer is short on purpose, it links to the
-page that actually works through the reasoning — see [Core Concepts](/docs/core-concepts) especially.
+documents, not generic open-source boilerplate. A real `FAQ.md` also lives at the repo root; this
+page draws from it and from the wider source rather than replacing it. Where an answer is short on
+purpose, it links to the page that actually works through the reasoning — see
+[Core Concepts](/docs/core-concepts) especially.
 
 ## Why does `maxFee` have no default?
 
@@ -39,23 +41,32 @@ model. Planned is not the same as scheduled or completed; nothing here should be
 
 ## Does the relayer support CORS?
 
-No. There's no `@fastify/cors` dependency in `packages/relayer/package.json`, and grepping the whole
-repository for `cors` (case-insensitive) turns up nothing at all — no CORS plugin is registered
-anywhere in the relayer's Fastify app. If you're calling the relayer's HTTP API directly from a
-browser, plan around that rather than assuming it's handled. See [`/docs/relayer`](/docs/relayer).
+Yes, real and current, via `@fastify/cors` and the `FERRYLINE_CORS_ORIGINS` environment variable —
+but it's fail-closed by default, not fail-open: leave it unset and every browser-based caller
+(including `<ferryline-widget>`) is silently blocked by the browser itself before the request ever
+reaches the relayer, not a `*` allow-all default. If you're calling the relayer's HTTP API directly
+from a browser, set `FERRYLINE_CORS_ORIGINS` to that page's real origin explicitly. Server-to-server
+callers were never subject to CORS in the first place, so this only matters for browser-based
+integrations. See [`/docs/relayer`](/docs/relayer#cors).
 
 ## What happens to an outbound Stellar→EVM transfer after it's attested — does it deliver itself?
 
-No. CCTP's `receiveMessage` call on the destination chain is permissionless by the protocol's own
-design, meaning anyone can submit it, but nothing in this pipeline does so automatically for the
-Stellar→EVM direction: not Circle's own infrastructure, and not this project's relayer, which only
-covers the opposite (EVM→Stellar) direction. `track()` will keep reporting `verified` (attested, not
-yet delivered) indefinitely until someone — the sender, the recipient, or their own infrastructure —
-submits that call themselves. This doesn't put funds at risk (the attestation and mint recipient are
-correct the whole time), but it does mean the transfer doesn't complete on its own. See
-[Core Concepts](/docs/core-concepts#three-problems-solved-once) for the full explanation, and
-`packages/widget/e2e/submit-receive-message.mjs` for a real, working example of submitting that call
-manually.
+It depends on whether you registered it with a relayer. A self-hosted Ferryline outbound relayer
+now exists (`packages/relayer/`, opt-in per deployment) — if you called `@ferryline/sdk`'s
+`Ferryline.registerOutboundTransfer(transferId)` on the transfer's final step (the widget does this
+automatically), the configured relayer watches for the attestation and submits the destination
+chain's `receiveMessage` call itself, the same way the inbound direction always has.
+
+If no relayer is configured — or the one you configured is unavailable, misconfigured, or has hit
+its own daily gas ceiling — then no, it doesn't complete itself: CCTP's `receiveMessage` remains
+permissionless by the protocol's own design, meaning anyone can submit it, but nothing does so
+automatically without a registered relayer. `track()` will keep reporting `verified` (attested, not
+yet delivered) until someone — the sender, the recipient, or their own infrastructure — submits that
+call manually. This doesn't put funds at risk either way (the attestation and mint recipient are
+correct the whole time), just delivery timing. See
+[Core Concepts](/docs/core-concepts#three-problems-solved-once) and
+[the end-to-end walkthrough](/docs/bridge-walkthrough) for both the automatic and manual paths, with
+real transaction hashes for each.
 
 ## Is the relayer's API-key auth production-grade?
 
@@ -104,7 +115,7 @@ both blocked on a funded mainnet operator account rather than on missing code:
   behavior itself is unverified.
 
 Both experiments (`exp:inbound-usdt0-no-trustline` and `exp:inbound-usdt0-c-address`) are named as
-real starting points in [Contributing](/docs/contributing#where-to-start).
+real starting points in [Contributing](/docs/contributing#where-help-is-genuinely-needed-right-now).
 
 ## Is there a CLA, a code of conduct, or a formal contributor process?
 

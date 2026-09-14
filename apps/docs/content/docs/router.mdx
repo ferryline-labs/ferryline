@@ -21,10 +21,10 @@ the payer — and it supports smart accounts for free: the `payer` parameter is 
 `Address`, and Soroban treats a regular keypair-controlled account and a smart-contract-controlled
 account identically, so the router needs no special-case logic to work with either.
 
-The source lives at `contracts/router`, tested with 29 tests (part of the project's 322 total — see
-the [introduction](/docs) for how that number breaks down across packages), and its own three
-companion documents — `SCOPE.md`, `THREAT_MODEL.md`, and `TESTNET_DEPLOYMENT.md` — are the source of
-everything on this page.
+The source lives at `contracts/router`, tested with 32 tests (`cargo test`, in its own Cargo
+workspace — see [Security & Verification](/docs/security) for how the whole project's real current
+test counts break down), and its own three companion documents — `SCOPE.md`, `THREAT_MODEL.md`, and
+`TESTNET_DEPLOYMENT.md` — are the source of everything on this page.
 
 ## The current testnet deployment
 
@@ -355,6 +355,38 @@ public entry point has any `Address`-typed parameter used as a call target — `
 not something the router invokes — and this is checked by a structural test, not just read as true
 from the source.
 
+### 6. Every successful leg emits a real `TransferSent` event
+
+Both `send_cross_chain` and each leg of `send_cross_chain_batch` still return `()` at the type
+level — that hasn't changed — but `()` no longer means "no record exists." A real, structured event
+is published once a leg's rail call has actually succeeded:
+
+```rust
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TransferSent {
+    #[topic]
+    pub payer: Address,
+    #[topic]
+    pub rail: Rail,
+    pub destination: BytesN<32>,
+    pub amount: i128,
+}
+```
+
+Published inside `dispatch_one_leg`, right after the `Volume` counter write — the same choke point,
+under the same Elev.2 ordering guarantee (§2 above): reached only if the rail call itself didn't
+panic. A rolled-back leg emits nothing, including an _earlier_, individually-valid leg in the same
+reverted batch — proven by a real test, not just asserted: `repud_1_a_rolled_back_leg_emits_no_event_even_for_an_earlier_valid_leg_in_the_same_batch`.
+Two more real tests prove the shape: a single `send_cross_chain` emits exactly one event with that
+call's own real values (`repud_1_single_send_emits_transfer_sent_with_the_real_call_s_own_values`),
+and an N-leg batch emits N events, one per leg, never one per batch call
+(`repud_1_batch_emits_one_transfer_sent_per_leg_not_one_per_batch`).
+
+One honest caveat: the currently deployed testnet contract (see above) predates this fix — no
+redeployment has happened since. `TransferSent` is confirmed by source and unit tests, not yet by a
+real on-chain testnet transaction the way the other invariants on this page are.
+
 ## What v1 deliberately does not do
 
 `SCOPE.md` calls out several absences explicitly, "written for an auditor or integrator who should
@@ -384,21 +416,15 @@ The reasoning is the same as for upgradability: a pause mechanism is itself a pr
 and the rail contracts underneath (which do have pause/admin machinery of their own, being Circle's
 and LayerZero's) are where operational control already lives.
 
-**No per-transfer event emission (yet).** `SCOPE.md` frames this as "no per-transfer on-chain
-history" — the router's only on-chain record of activity is the aggregate `volume()` counters, one
-per rail, not a queryable log of individual transfers:
-
-> Per `THREAT_MODEL.md`'s Dos.2, the volume footprint is a small set of aggregate counters, not a
-> queryable log of individual transfers. An integrator or auditor who needs a full transfer history
-> should use the router's emitted events ... combined with off-chain indexing.
-
-Worth disclosing plainly here rather than smoothing over: that sentence refers forward to events that,
-per `THREAT_MODEL.md`'s own Repud.1 entry, **do not exist yet** — "No event emission exists yet;
-`send_cross_chain`/`send_cross_chain_batch` return `()`." It's confirmed real, scheduled future work,
-not something silently dropped, and it doesn't weaken anything already implemented (authorization,
-atomicity, and bounded storage are all independent of it) — but today, there is no on-chain,
-per-transfer record at all, aggregate or otherwise, beyond the two rail-level totals `volume()`
-exposes.
+**No queryable on-chain history — but the pieces to build one off-chain now exist.** `SCOPE.md`
+frames the router's own storage footprint plainly: the aggregate `volume()` counters (one per rail)
+are all the contract itself stores, "a small set of aggregate counters, not a queryable log of
+individual transfers." That's still true — the router has no built-in indexer, no way to ask it
+"list every transfer `payer` X has sent." What changed is the raw material such an index would be
+built from: [`TransferSent`](#6-every-successful-leg-emits-a-real-transfersent-event), a real event
+on every successful leg (see invariant 6 above), which an integrator or auditor combines with their
+own off-chain indexing to get that full history — exactly what `SCOPE.md`'s own text anticipated,
+now backed by a real implementation rather than a forward reference to work that didn't exist yet.
 
 ## The two rails are not equally proven
 

@@ -92,6 +92,22 @@ that the requested behavior didn't happen as asked. That's precisely why the SDK
 callers to state the value explicitly rather than defaulting it: a confirmed-safe value for one
 tested case isn't the same guarantee as a verified unit conversion for every input.
 
+## A real outbound send, re-confirmed through the SDK's own adapter after a real code change
+
+On 2026-09-13, a second real wallet-signed CCTP outbound burn was run through
+`@ferryline/sdk`'s own `UsdcCctpAdapter` directly (not a raw script bypassing it) — real burn
+transaction `dfd904fc34b2371db9a033607b237c48b672aafe8bf1436760278a30f7cd9977`, USDC balance drop
+98.8050000 → 98.3050000 independently confirmed via Horizon, with a real, complete Circle Iris
+attestation (`status: "complete"`, `feeExecuted: "0"`, `finalityThresholdExecuted: "2000"`). This
+run used a standing allowance from a prior transfer, so `build()` correctly produced a single ready
+step rather than the two-step deferred approve/burn shape — both are real, observed outcomes (see
+[Core Concepts](/docs/core-concepts#the-lifecycle)). This is the evidentiary basis for a real,
+current change worth knowing about: `@ferryline/sdk` now also exports `registerOutboundTransfer()`
+and `isFinalStep()`, which opt an outbound transfer into automatic delivery via a self-hosted
+relayer — see [SDK Reference](/docs/sdk-reference#registeroutboundtransfer) and
+[Relayer](/docs/relayer) for the full mechanism, and the
+[end-to-end walkthrough](/docs/bridge-walkthrough) for it used in a complete transfer.
+
 ## Structural guarantees, each mapped to a real test
 
 `ARCHITECTURE.md`'s security model doesn't just assert properties — it names the specific test
@@ -144,29 +160,40 @@ verified" section, not resolved and not assumed in either direction:
 
 ## Real test counts, verified fresh for this page
 
-Rather than repeat a number from an older document, these counts come from running each package's
-test suite directly, on 2026-09-14:
+An earlier version of this page repeated figures from `README.md`/`ARCHITECTURE.md` that turned
+out to be stale — real Phase 6 test files roughly doubled the SDK's and relayer's counts without
+those headline numbers being updated. So rather than repeat a number from another document, every
+count below comes from actually running each package's real test suite, on 2026-09-14:
 
-| Package             | Command                                | Result                      |
-| ------------------- | -------------------------------------- | --------------------------- |
-| `@ferryline/core`   | `pnpm --filter @ferryline/core test`   | 60 tests passing (4 files)  |
-| `@ferryline/sdk`    | `pnpm --filter @ferryline/sdk test`    | 83 tests passing (8 files)  |
-| `ferryline-relayer` | `pnpm --filter ferryline-relayer test` | 98 tests passing (10 files) |
-| `@ferryline/widget` | `pnpm --filter @ferryline/widget test` | 34 tests passing (4 files)  |
+| Package                    | Command                                       | Result                       |
+| -------------------------- | --------------------------------------------- | ---------------------------- |
+| `@ferryline/core`          | `pnpm --filter @ferryline/core test`          | 60 tests passing (4 files)   |
+| `@ferryline/sdk`           | `pnpm --filter @ferryline/sdk test`           | 91 tests passing (8 files)   |
+| `ferryline-relayer`        | `pnpm --filter ferryline-relayer test`        | 196 tests passing (17 files) |
+| `@ferryline/widget`        | `pnpm --filter @ferryline/widget test`        | 35 tests passing (4 files)   |
+| `@ferryline/design-tokens` | `pnpm --filter @ferryline/design-tokens test` | 16 tests passing (1 file)    |
+| `@ferryline/site`          | `pnpm --filter @ferryline/site test`          | 14 tests passing (3 files)   |
+| `ferryline-router`         | `cargo test` (`contracts/router`)             | 32 tests passing             |
 
-That's **275 passing tests**, confirmed fresh, across the four TypeScript packages — matching
-`ARCHITECTURE.md`'s own "275 passing across four TypeScript packages" figure for unit and
-component tests. Two things worth being precise about:
+That's **444 passing tests**, all independently re-run for this page, not carried from another
+document. Two things worth being precise about, disclosed rather than smoothed over:
 
 - The relayer's `test` script deliberately excludes its live-database integration tests
-  (`--exclude '**/*.integration.test.ts'`); those 18 tests run against a real, disposable Postgres
-  container and need `docker compose up -d postgres` first (see the [relayer page](/docs/relayer)).
-  They weren't re-run for this page, so treat "98" as the freshly-confirmed unit/component number
-  and the relayer's full count as 98 + 18 documented elsewhere, not independently re-verified here.
-- The router's 29 Soroban/Rust tests (`cargo test`, in its own Cargo workspace) also weren't re-run
-  for this page — this page's test-verification step ran only the four `pnpm` commands above, not
-  `cargo test`. The 29 figure is carried from `ARCHITECTURE.md` and `README.md`, not independently
-  confirmed fresh here.
+  (`--exclude '**/*.integration.test.ts'`); those need a real, disposable Postgres container
+  (`docker compose up -d postgres`, see the [relayer page](/docs/relayer)) that wasn't available
+  in the environment this page was verified from (no running Docker daemon). Real evidence points
+  to roughly 37 of them now — up from an earlier 18, doubled by the same real inbound/outbound
+  split behind the relayer's 98→196 unit-test growth above — but this page did not independently
+  re-run them, so treat 37 as a well-evidenced estimate, not a confirmed count the way the 444
+  above are.
+- **A real discrepancy in the project's own root docs, found while verifying this page, not fixed
+  here:** `README.md`'s current headline ("353 automated tests… 116 relayer including
+  live-database integration tests") and `ARCHITECTURE.md`'s equivalent figures don't reflect the
+  real current counts above — they were written before Phase 6's real test additions and haven't
+  been updated since. This page's own numbers are independently re-run and real; fixing the root
+  project docs' headline figures is out of scope for this docs site to do unilaterally, but is
+  exactly the kind of stale-claim fix [Contributing](/docs/contributing)'s Documentation section
+  welcomes.
 
 ## Where to go next
 

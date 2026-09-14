@@ -29,8 +29,12 @@ export interface FerrylineConfig {
   readonly network: "mainnet" | "testnet";
   /** Stellar RPC endpoint. */
   readonly rpcUrl: string;
-  /** Ferryline relayer endpoint, needed for inbound USDC. Optional until the relayer exists. */
+  /** Ferryline relayer endpoint, shared by both directions: inbound (EVM -> Stellar) registration
+   * and outbound (Stellar -> EVM) registration both read this same value. Optional — a caller with
+   * no relayer configured still gets a fully working SDK for quote/build/track; only the
+   * register-with-a-relayer calls become no-ops (see registerOutboundTransfer's own doc comment). */
   readonly relayerUrl?: string;
+  readonly relayerApiKey?: string;
   /** Where transfers are remembered between build() and track(). Defaults to in-memory. */
   readonly store?: TransferStore;
 }
@@ -47,11 +51,11 @@ The constructor sets `this.store = config.store ?? new InMemoryTransferStore()`.
 up by default — you register the rail(s) you need explicitly, which the source's own comment says
 is deliberate: "the money-moving code paths are opt-in and reviewable one rail at a time."
 
-Note that `relayerUrl` is accepted on the config but never read anywhere in `Ferryline` itself —
-grepping `packages/sdk/src` for `relayerUrl` turns up only this one declaration. It exists so a
-caller can hold the relayer's URL alongside the rest of the SDK's config, but `Ferryline` doesn't
-call the relayer for you; registering an inbound EVM→Stellar transfer with the relayer is a
-separate HTTP call to `POST /transfers`, documented on the [Relayer](/docs/relayer) page.
+`relayerUrl`/`relayerApiKey` are read by [`registerOutboundTransfer()`](#registeroutboundtransfer)
+below, which `POST`s to `${relayerUrl}/outbound-transfers`. Registering an **inbound** EVM→Stellar
+transfer with the relayer is a separate call, `POST /transfers`, documented on the
+[Relayer](/docs/relayer) page — the SDK doesn't wrap that one for you the way it now wraps the
+outbound registration.
 
 ### `registerAdapter()`
 
@@ -118,6 +122,48 @@ Tells Ferryline which hash the wallet got back after broadcasting a signed step 
 to `this.store.markSubmitted(transferId, sourceTxHash)`. `InMemoryTransferStore`'s implementation
 rejects with `TRANSFER_UNKNOWN` if the transfer isn't already recorded. `track()` blocks on this
 value being set, so call it right after your wallet returns a transaction hash for the first step.
+`markSubmitted` does **not** trigger outbound relayer registration itself — that's a separate,
+explicit call, `registerOutboundTransfer()` below.
+
+### `registerOutboundTransfer()`
+
+```ts
+registerOutboundTransfer(transferId: TransferId): Promise<void>;
+```
+
+Opts an **outbound** (Stellar→EVM) CCTP transfer into automatic delivery via a self-hosted
+[relayer](/docs/relayer). The real doc comment on this method is exact about timing, quoted in
+full because getting this wrong is a real bug this project already shipped and had to fix:
+
+> CALL THIS ONLY AFTER THE FINAL STEP OF A `build()` RESULT HAS BEEN CONFIRMED — never from a
+> per-step callback that also runs for intermediate steps. This is not a stylistic preference;
+> calling it earlier is a REAL BUG THIS PROJECT ALREADY SHIPPED AND HAD TO FIX. Use
+> `isFinalStep(built, stepIndex)` (exported below) to find the right point:
+> `if (isFinalStep(built, stepIndex)) { await ferryline.registerOutboundTransfer(built.transferId); }`,
+> called only once, after that specific step's real tx hash has already been recorded via
+> `markSubmitted`.
+
+Concretely, it `POST`s to `${relayerUrl}/outbound-transfers` with
+`{ transferId, sourceTxHash, destinationChain, rail: "usdc-cctp" }` — the same
+never-trust-amount-or-recipient-from-the-registration-call security property the relayer's inbound
+`POST /transfers` already has (see [Relayer](/docs/relayer)). It **never throws**: three separate
+conditions all make it a silent no-op rather than an error — no `relayerUrl` configured; the
+transfer isn't an outbound CCTP transfer (checked via `rail === "usdc-cctp" && request.from.chain
+=== "stellar"`); or the HTTP registration itself fails (network error, non-`201` response) — that
+case is caught, logged with `console.error`, and swallowed, on the reasoning that the burn is
+already on-chain and unaffected by a failed registration call. `@ferryline/widget` calls this
+automatically on your behalf once its final step confirms, so a raw SDK integrator needs it only
+when driving transfers directly (see the [end-to-end walkthrough](/docs/bridge-walkthrough)).
+
+### `isFinalStep()`
+
+```ts
+export function isFinalStep(built: Pick<BuiltTransfer, "steps">, stepIndex: number): boolean;
+```
+
+`stepIndex === built.steps.length - 1`. The canonical way to find the one correct call site for
+`registerOutboundTransfer()` above, exported specifically so callers don't have to reimplement
+"is this the last step" themselves.
 
 ### `track()`
 
@@ -458,7 +504,7 @@ those tables into a typed error for you.
 quote/build/track surface: `backoffDelay` and `sleep` (`util/backoff.js` — exponential backoff,
 `initial * 2^attempt` clamped to a ceiling, and a signal-aware sleep that rejects with `"aborted"`
 when the `AbortSignal` fires mid-wait); `SDK_VERSION` and `FERRYLINE_SDK_USER_AGENT`
-(`version.js` — `SDK_VERSION` mirrors `package.json`'s version, currently `"0.0.0"`, with a test
+(`version.js` — `SDK_VERSION` mirrors `package.json`'s version, currently `"0.1.0"` (the first published version — `@ferryline/sdk` and `@ferryline/core` are the only two packages published to npm so far), with a test
 that keeps the two in sync; `FERRYLINE_SDK_USER_AGENT` is `` `ferryline-sdk/${SDK_VERSION}` ``, sent
 on every Iris request); `ERC20_ABI` and `EVM_ADDRESS` (`evm/reader.js` — a minimal `approve`/
 `allowance`/`balanceOf` ABI and the `/^0x[0-9a-fA-F]{40}$/` regex both adapters validate EVM
@@ -470,6 +516,10 @@ assemble into read-only calls and unsigned envelopes respectively, `getTrustline
 `UsdcCctpAdapter` and `Usdt0LayerZeroAdapter` are themselves built on top of.
 
 ## Recent changes worth knowing about
+
+The biggest recent change is `registerOutboundTransfer()`/`isFinalStep()` themselves (documented
+above) — real, current, user-facing API additions that opt an outbound transfer into automatic
+relayer-driven delivery. They aren't in `CHANGELOG.md`; the changelog covers lower-level fixes:
 
 `packages/sdk/CHANGELOG.md` documents a real, previously-shipped bug worth knowing if you're
 reading older code or issues: both outbound builders used to attach a `MEMO_TEXT` to the Stellar
@@ -509,9 +559,8 @@ transaction, with real hashes.
 
 Registering an **inbound** (EVM→Stellar) transfer with the self-hosted relayer — `POST /transfers`
 in `@ferryline/relayer` (`packages/relayer/src/http/routes/register-transfer.ts`) — is a different
-package's HTTP API, not part of `@ferryline/sdk`. It's the [Relayer](/docs/relayer) page's job to
-document; this page only covers what you import from `@ferryline/sdk` itself. There is also no
-`registerOutboundTransfer` or `registerInboundTransfer` method anywhere in this SDK — if you've seen
-either name mentioned elsewhere, it doesn't exist in the current source (confirmed by a direct
-search of `packages/sdk/src` while writing this page); the closest things are `Ferryline.build()`
-(which records the transfer for you) and the relayer's own registration endpoint above.
+package's HTTP API, not part of `@ferryline/sdk`. There's no `registerInboundTransfer` method on
+`Ferryline` either; that one lives only on `@ferryline/widget`'s custom element (see
+[Widget](/docs/widget)), which wraps the relayer's inbound endpoint for you. `@ferryline/sdk`
+itself only wraps the **outbound** registration call, via `registerOutboundTransfer()` above — a
+genuine asymmetry between the two directions, not an oversight left out of this page.

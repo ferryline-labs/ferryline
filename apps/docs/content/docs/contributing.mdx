@@ -3,6 +3,9 @@ title: Contributing
 description: How issues get scoped, the real build/test/lint commands, what CI actually checks, and what isn't set up yet.
 ---
 
+A real `CONTRIBUTING.md` lives at the repo root — this page draws from it and from root `README.md`'s
+own Contributing section, rather than replacing either.
+
 ## The philosophy, quoted
 
 The root `README.md`'s own Contributing section states this plainly, and it's worth quoting exactly
@@ -43,11 +46,13 @@ For the Soroban router, from `contracts/router`:
 ```sh
 cargo fmt --check
 cargo clippy --all-targets
-cargo test            # 29 tests
+cargo test            # 32 tests
 stellar contract build
 ```
 
-The relayer additionally has 18 live-database integration tests that need a running Postgres
+The relayer additionally has real live-database integration tests (see
+[Security & Verification](/docs/security) for the current count and why this page doesn't hardcode
+it) that need a running Postgres
 instance — see [`/docs/relayer`](/docs/relayer) and the package's own README for
 `docker compose up -d postgres` plus `pnpm vitest run --config vitest.integration.config.ts`. The
 widget has a real, manual end-to-end test against an actual installed browser wallet extension,
@@ -102,22 +107,32 @@ first — a stale or missing `dist/` in `@ferryline/core` or `@ferryline/sdk` is
 Note `-D warnings` on the clippy step: a clippy warning fails CI here the same as an error would,
 there's no separate "warnings are fine" tier.
 
-## Where to start
+## Where help is genuinely needed right now
 
-The README's own Contributing section names two concrete starting points rather than leaving this
-open-ended:
+The real, current `CONTRIBUTING.md` at the repo root is the canonical, kept-in-sync list — every
+item on it is a real, currently open gap with a link to the evidence behind it, not invented
+busywork; if one resolves, the real file gets updated or the item removed, not silently left stale.
+As of this writing, exactly two things are on it:
 
-- The two currently-**BLOCKED** USDT0 experiments — `exp:inbound-usdt0-no-trustline` and
-  `exp:inbound-usdt0-c-address` (both mainnet-only, both need explicit opt-in, the second also needs
-  a funded smart account). They're blocked on a funded mainnet operator account, not on missing code
-  — see [`packages/core/VERIFIED.md`](/docs/security)'s "Not yet verified" section for exactly what
-  each would resolve.
-- The outbound-CCTP no-auto-relay gap: a Stellar→EVM CCTP transfer's destination `receiveMessage`
-  call has no automatic submitter anywhere in this project today. See
-  [Core Concepts](/docs/core-concepts#three-problems-solved-once) for the full shape of the gap —
-  `packages/widget/e2e/submit-receive-message.mjs` is a real, working example of completing delivery
-  manually, referenced from the root README. Designing and shipping the equivalent of the inbound
-  relayer for the outbound direction is real, open work, not a hypothetical.
+- **Inbound USDT0 to a Stellar smart-account (C-address) recipient.** Whether LayerZero's OFT can
+  deliver USDT0 to a Soroban smart-account recipient at all is genuinely untested — the SDK
+  currently refuses this (`UNSUPPORTED_RECIPIENT_KIND`) rather than assume it works. The companion
+  question — what happens when USDT0 arrives at an account with no trustline, and whether delivery
+  retries once one is added — is equally open. Both are blocked on a funded mainnet operator account
+  and, for the first, a real Stellar smart account to target — not on missing code. See
+  [`packages/core/VERIFIED.md`](/docs/security)'s "Not yet verified" section for exactly what each
+  would resolve.
+- **Documentation.** This project holds itself to a high evidence bar; a claim in any README,
+  `ARCHITECTURE.md`, or verified-facts document that doesn't match the current real code is treated
+  as a real bug, not a nitpick. Doc-only PRs that fix a stale claim are genuinely welcome and don't
+  need to clear the same bar as a code change (though they should still be accurate) — this very
+  docs site was itself found to describe a stale state of the API at one point and had to be
+  corrected against real, current source, which is exactly the kind of fix this item is asking for.
+
+**Not on the list, on purpose:** an earlier version of this page also named the outbound-CCTP
+no-auto-relay gap as open work. It's since shipped — a real, self-hosted outbound relayer now
+exists (see [Relayer](/docs/relayer) and [Core Concepts](/docs/core-concepts)) — so it's been
+removed here too, matching the real `CONTRIBUTING.md`'s own current list.
 
 If you want something smaller to start with, `pnpm test`, `pnpm lint`, and `cargo clippy --all-targets
 -- -D warnings` are exactly what CI runs, so any gap you find between "passes locally" and "would

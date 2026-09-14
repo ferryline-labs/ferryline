@@ -1,6 +1,15 @@
 import type { Config } from "tailwindcss";
 
-import { brand, duration, easing, fontSize, gray, radius, semantic, spacing } from "@ferryline/design-tokens";
+import {
+  brand,
+  duration,
+  easing,
+  fontSize,
+  gray,
+  radius,
+  semantic,
+  spacing,
+} from "@ferryline/design-tokens";
 
 // Same real design tokens as apps/site and packages/widget — @ferryline/design-tokens is plain
 // data (no Tailwind dependency of its own); each consuming app builds its own Tailwind-shaped
@@ -38,19 +47,31 @@ const config: Config = {
       fontSize: {
         "title-2": [
           fontSize["title-2"].size,
-          { lineHeight: fontSize["title-2"].lineHeight, letterSpacing: fontSize["title-2"].letterSpacing },
+          {
+            lineHeight: fontSize["title-2"].lineHeight,
+            letterSpacing: fontSize["title-2"].letterSpacing,
+          },
         ],
         "title-3": [
           fontSize["title-3"].size,
-          { lineHeight: fontSize["title-3"].lineHeight, letterSpacing: fontSize["title-3"].letterSpacing },
+          {
+            lineHeight: fontSize["title-3"].lineHeight,
+            letterSpacing: fontSize["title-3"].letterSpacing,
+          },
         ],
         "text-1": [
           fontSize["text-1"].size,
-          { lineHeight: fontSize["text-1"].lineHeight, letterSpacing: fontSize["text-1"].letterSpacing },
+          {
+            lineHeight: fontSize["text-1"].lineHeight,
+            letterSpacing: fontSize["text-1"].letterSpacing,
+          },
         ],
         "text-2": [
           fontSize["text-2"].size,
-          { lineHeight: fontSize["text-2"].lineHeight, letterSpacing: fontSize["text-2"].letterSpacing },
+          {
+            lineHeight: fontSize["text-2"].lineHeight,
+            letterSpacing: fontSize["text-2"].letterSpacing,
+          },
         ],
         "text-3": [fontSize["text-3"].size, { lineHeight: fontSize["text-3"].lineHeight }],
         "text-4": [fontSize["text-4"].size, { lineHeight: fontSize["text-4"].lineHeight }],

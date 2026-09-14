@@ -35,6 +35,11 @@ const senderKeypair = Keypair.fromSecret(process.env.STELLAR_SECRET!);
 const ferryline = new Ferryline({
   network: "testnet",
   rpcUrl: "https://soroban-testnet.stellar.org",
+  // Optional, but this is what opts an outbound transfer into automatic delivery below (see
+  // "Register for automatic delivery" further down) — omit both to fall back to the fully manual
+  // path instead.
+  relayerUrl: "https://your-relayer.example.com",
+  relayerApiKey: process.env.RELAYER_API_KEY,
 });
 ferryline.registerAdapter(
   new UsdcCctpAdapter({ network: "testnet", stellarRpc, store: ferryline.store }),
@@ -92,6 +97,8 @@ async function signAndSubmit(xdr: string, keypair: Keypair): Promise<string> {
 ### Walk through the steps
 
 ```ts
+import { isFinalStep } from "@ferryline/sdk";
+
 let burnTxHash: string;
 
 if (built.steps.length === 2) {
@@ -112,6 +119,25 @@ if (built.steps.length === 2) {
 // transaction Iris never attests.
 await ferryline.markSubmitted(built.transferId, burnTxHash);
 ```
+
+### Register for automatic delivery
+
+The burn's the final step for this transfer (`isFinalStep` returns true regardless of whether it
+was a 1-step or 2-step build) — the right moment to opt into automatic delivery, if a relayer is
+configured:
+
+```ts
+if (isFinalStep(built, built.steps.length - 1)) {
+  await ferryline.registerOutboundTransfer(built.transferId);
+}
+```
+
+This is a no-op (never throws) if `relayerUrl` wasn't set in the client config above — see
+[SDK Reference](/docs/sdk-reference#registeroutboundtransfer) for the exact timing rule and why
+calling it any earlier is a real bug this project already shipped and fixed. With a relayer
+configured, this is normally all it takes for delivery to complete on its own; skip to
+[the honest limits of that claim](#delivery-isnt-a-guaranteed-sla) if you want the caveats before
+relying on it.
 
 ### Track it to completion
 
@@ -137,20 +163,33 @@ keypair), landing burn transaction
 Iris returned a real, complete attestation within seconds, and `track()` correctly reported
 `Verified, delivering`.
 
-### The auto-relay gap
+**Dated context worth knowing:** this specific run (2026-09-12) predates
+`registerOutboundTransfer()` and the outbound relayer, so it never registered for automatic
+delivery — see [Delivery isn't a guaranteed SLA](#delivery-isnt-a-guaranteed-sla) below for what
+changed since, and for the honest limits of that change. A second, independent run the following
+day (2026-09-13, `dfd904fc34b2371db9a033607b237c48b672aafe8bf1436760278a30f7cd9977`) re-confirmed
+the SDK's own burn still works correctly after that change, from a sender with a standing
+allowance (so a real 1-step run this time) — real, independently-verified via Horizon, balance
+98.8050000 → 98.3050000 USDC.
 
-Here's the part worth knowing before you rely on this in a real product: **`track()`'s `delivered`
-stage never arrived on its own.** `track()` only _observes_
-`MessageTransmitterV2.usedNonces(nonce)` on the destination chain — it never submits the
-`receiveMessage` call itself, and neither does anything else in this project for the outbound
-direction (Ferryline's own relayer exists only for the opposite, inbound direction — see
-[the Relayer docs](/docs/relayer)). In the real run above, the nonce was still unconsumed after 40
-real minutes of polling. Circle's own documentation says an API consumer must submit the
-attestation onchain themselves; nothing does that automatically here for outbound transfers today.
+### Delivery isn't a guaranteed SLA
 
-CCTP's `receiveMessage` is permissionless by design — anyone holding the real message and
-attestation bytes can submit it and pay the gas. Fetching those bytes and submitting it directly,
-using the SDK's own exported ABI:
+Two things are both true, and worth keeping straight: outbound delivery **is now automatic by
+default**, if you registered as above — a self-hosted Ferryline outbound relayer exists
+(`packages/relayer/`, opt-in via `FERRYLINE_OUTBOUND_ENABLED=true` for whoever runs it), watches
+for the attestation the same way the inbound relayer already did, and submits `receiveMessage`
+itself once verified. Its own design doc states this plainly: "v1 is implemented, tested, and
+testnet-proven with a real Sepolia transaction." That's a real, load-bearing change from what this
+page used to say.
+
+What hasn't changed, and never will: `receiveMessage` remains genuinely permissionless by CCTP's
+own design, and `track()` itself still only _observes_ `MessageTransmitterV2.usedNonces(nonce)` —
+it never submits the call itself, registered relayer or not. So if no relayer is configured, or the
+one you configured is unavailable, misconfigured, or has hit its own daily gas ceiling, delivery
+does **not** complete itself — exactly the situation the real 2026-09-12 run above hit, before this
+capability existed at all. In that case, anyone holding the real message and attestation bytes can
+still submit it by hand and pay the gas — the sender, the recipient, or your own infrastructure.
+Fetching those bytes and submitting it directly, using the SDK's own exported ABI:
 
 ```ts
 import { createWalletClient, http } from "viem";
@@ -182,7 +221,7 @@ rose from 19.0 to 19.5 USDC immediately after.
 
 ## Part 2 — Inbound: Ethereum Sepolia → Stellar
 
-This direction _does_ have automatic delivery, via the self-hosted relayer (see
+This direction has had automatic delivery from the start, via the self-hosted relayer (see
 [the Relayer docs](/docs/relayer) for running your own). The SDK builds the burn; the relayer
 watches for it and completes the mint.
 
