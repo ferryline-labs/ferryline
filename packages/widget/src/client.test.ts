@@ -1,9 +1,217 @@
-import { Api } from "@stellar/stellar-sdk/rpc";
+import { Buffer } from "buffer";
+
+import { Account, BASE_FEE, Contract, Keypair, TransactionBuilder } from "@stellar/stellar-sdk";
+import { Api, type Server } from "@stellar/stellar-sdk/rpc";
 import { describe, expect, it, vi } from "vitest";
 
-import { waitForStellarConfirmation } from "./client.js";
+import {
+  submitStellarTransactionWithRejectionRecheck,
+  waitForStellarConfirmation,
+} from "./client.js";
 
-const { SUCCESS, NOT_FOUND, FAILED } = Api.GetTransactionStatus;
+const { SUCCESS, NOT_FOUND: NOT_FOUND_STATUS, FAILED } = Api.GetTransactionStatus;
+
+const NETWORK_PASSPHRASE = "Test SDF Network ; September 2015";
+const SENDER = Keypair.random().publicKey();
+const TOKEN_MESSENGER = "CDNG7HXAPBWICI2E3AUBP3YZWZELJLYSB6F5CC7WLDTLTHVM74SLRTHP";
+
+type FakeableServer = Pick<Server, "sendTransaction" | "getTransaction">;
+
+/** A real, signed, minimal invoke-contract transaction — same shape used throughout index.test.ts's
+ *  own fixtures, not placeholder XDR. `tx.hash()` on the returned object is the real, deterministic
+ *  hash the function under test is required to compute independently of anything a fake `Server`
+ *  returns. */
+function realSignedTransaction(): Parameters<Server["sendTransaction"]>[0] {
+  const source = new Account(SENDER, "100");
+  return new TransactionBuilder(source, { fee: BASE_FEE, networkPassphrase: NETWORK_PASSPHRASE })
+    .addOperation(new Contract(TOKEN_MESSENGER).call("deposit_for_burn"))
+    .setTimeout(300)
+    .build();
+}
+
+const NOT_FOUND: Api.GetMissingTransactionResponse = {
+  status: Api.GetTransactionStatus.NOT_FOUND,
+  txHash: "unused",
+  latestLedger: 1,
+  latestLedgerCloseTime: 1,
+  oldestLedger: 1,
+  oldestLedgerCloseTime: 1,
+};
+
+function successResponse(txHash: string): Api.GetSuccessfulTransactionResponse {
+  return {
+    status: Api.GetTransactionStatus.SUCCESS,
+    txHash,
+    latestLedger: 1,
+    latestLedgerCloseTime: 1,
+    oldestLedger: 1,
+    oldestLedgerCloseTime: 1,
+    ledger: 1,
+    createdAt: 1,
+    applicationOrder: 1,
+    feeBump: false,
+    envelopeXdr: {} as Api.GetSuccessfulTransactionResponse["envelopeXdr"],
+    resultXdr: {} as Api.GetSuccessfulTransactionResponse["resultXdr"],
+    resultMetaXdr: {} as Api.GetSuccessfulTransactionResponse["resultMetaXdr"],
+    events: {} as Api.GetSuccessfulTransactionResponse["events"],
+  };
+}
+
+function rejected(hash: string): Api.SendTransactionResponse {
+  return { status: "ERROR", hash, latestLedger: 1, latestLedgerCloseTime: 1 };
+}
+
+function accepted(hash: string): Api.SendTransactionResponse {
+  return { status: "PENDING", hash, latestLedger: 1, latestLedgerCloseTime: 1 };
+}
+
+/** Fake `Server` exposing only what submitStellarTransactionWithRejectionRecheck needs, with
+ *  call-count tracking so tests can assert the retry/recheck bound is actually respected. Each
+ *  call consumes the next fixture from its list; calling past the end of a list is a test bug. */
+function fakeServer(options: {
+  readonly sendTransactionResults: readonly Api.SendTransactionResponse[];
+  readonly getTransactionResults: readonly Api.GetTransactionResponse[];
+}): FakeableServer & { sendTransactionCalls: number; getTransactionCalls: number } {
+  let sendIndex = 0;
+  let getIndex = 0;
+  const counts = { sendTransactionCalls: 0, getTransactionCalls: 0 };
+  return {
+    ...counts,
+    async sendTransaction(): Promise<Api.SendTransactionResponse> {
+      counts.sendTransactionCalls += 1;
+      const result = options.sendTransactionResults[sendIndex];
+      if (!result) {
+        throw new Error("fakeServer: sendTransaction called more times than fixtures provided");
+      }
+      sendIndex += 1;
+      return result;
+    },
+    async getTransaction(): Promise<Api.GetTransactionResponse> {
+      counts.getTransactionCalls += 1;
+      const result = options.getTransactionResults[getIndex];
+      if (!result) {
+        throw new Error("fakeServer: getTransaction called more times than fixtures provided");
+      }
+      getIndex += 1;
+      return result;
+    },
+    get sendTransactionCalls() {
+      return counts.sendTransactionCalls;
+    },
+    get getTransactionCalls() {
+      return counts.getTransactionCalls;
+    },
+  };
+}
+
+describe("submitStellarTransactionWithRejectionRecheck", () => {
+  it("sendTransaction accepts on the first try: returns the locally-computed hash, never calls getTransaction", async () => {
+    const tx = realSignedTransaction();
+    const realHash = Buffer.from(tx.hash()).toString("hex");
+    const server = fakeServer({
+      sendTransactionResults: [accepted(realHash)],
+      getTransactionResults: [],
+    });
+
+    const hash = await submitStellarTransactionWithRejectionRecheck(server, tx);
+
+    expect(hash).toBe(realHash);
+    expect(server.sendTransactionCalls).toBe(1);
+    expect(server.getTransactionCalls).toBe(0);
+  });
+
+  it("sendTransaction rejects, but getTransaction confirms it landed anyway: returns success, not an error", async () => {
+    const tx = realSignedTransaction();
+    const realHash = Buffer.from(tx.hash()).toString("hex");
+    // The exact reproduced scenario: a real rejection (tx_bad_seq-style), paired with the
+    // transaction actually being found on-chain when independently checked.
+    const server = fakeServer({
+      sendTransactionResults: [rejected("some-untrustworthy-hash-from-the-rejected-response")],
+      getTransactionResults: [successResponse(realHash)],
+    });
+
+    const hash = await submitStellarTransactionWithRejectionRecheck(server, tx);
+
+    // Must return the LOCALLY-computed hash (from tx.hash()), not whatever sendTransaction's own
+    // rejected response happened to carry.
+    expect(hash).toBe(realHash);
+    expect(server.sendTransactionCalls).toBe(1);
+    expect(server.getTransactionCalls).toBe(1);
+  });
+
+  it("sendTransaction rejects, not found on first recheck, found on a later retry: still returns success", async () => {
+    const tx = realSignedTransaction();
+    const realHash = Buffer.from(tx.hash()).toString("hex");
+    const server = fakeServer({
+      sendTransactionResults: [rejected(realHash), rejected(realHash)],
+      getTransactionResults: [NOT_FOUND, successResponse(realHash)],
+    });
+
+    const hash = await submitStellarTransactionWithRejectionRecheck(
+      server,
+      tx,
+      /* maxAttempts */ 3,
+      /* retryDelayMs */ 1,
+    );
+
+    expect(hash).toBe(realHash);
+    expect(server.sendTransactionCalls).toBe(2);
+    expect(server.getTransactionCalls).toBe(2);
+  });
+
+  it("genuine failure: rejected AND never found on-chain even after the bounded retries — reports failure", async () => {
+    const tx = realSignedTransaction();
+    const realHash = Buffer.from(tx.hash()).toString("hex");
+    const server = fakeServer({
+      sendTransactionResults: [rejected(realHash), rejected(realHash), rejected(realHash)],
+      getTransactionResults: [NOT_FOUND, NOT_FOUND, NOT_FOUND],
+    });
+
+    await expect(
+      submitStellarTransactionWithRejectionRecheck(
+        server,
+        tx,
+        /* maxAttempts */ 3,
+        /* retryDelayMs */ 1,
+      ),
+    ).rejects.toThrow(/submission rejected/);
+
+    // Bounded: exactly maxAttempts, not fewer (must actually retry) and not more (must actually
+    // stop).
+    expect(server.sendTransactionCalls).toBe(3);
+    expect(server.getTransactionCalls).toBe(3);
+  });
+
+  it("retries resubmit the SAME signed transaction object, never rebuilding it", async () => {
+    const tx = realSignedTransaction();
+    const realHash = Buffer.from(tx.hash()).toString("hex");
+    const seenTxObjects: unknown[] = [];
+    let sendCalls = 0;
+    let getCalls = 0;
+    const server: FakeableServer = {
+      async sendTransaction(t): Promise<Api.SendTransactionResponse> {
+        seenTxObjects.push(t);
+        sendCalls += 1;
+        return sendCalls === 1 ? rejected(realHash) : accepted(realHash);
+      },
+      async getTransaction(): Promise<Api.GetTransactionResponse> {
+        getCalls += 1;
+        return NOT_FOUND;
+      },
+    };
+
+    const hash = await submitStellarTransactionWithRejectionRecheck(
+      server,
+      tx,
+      /* maxAttempts */ 3,
+      /* retryDelayMs */ 1,
+    );
+
+    expect(hash).toBe(realHash);
+    expect(seenTxObjects).toEqual([tx, tx]);
+    expect(getCalls).toBe(1);
+  });
+});
 
 /**
  * Real regression test for the real bug this phase's own E2E run found: `submitStellarTransaction`
@@ -14,7 +222,7 @@ const { SUCCESS, NOT_FOUND, FAILED } = Api.GetTransactionStatus;
  * packages/core/verified/experiments/2026-09-12-widget-e2e-real-browser-wallet.md for the full,
  * real story (a real Freighter-signed testnet transaction, not a fabricated scenario).
  */
-function fakeServer(statuses: readonly Api.GetTransactionStatus[]): {
+function fakeGetTransactionServer(statuses: readonly Api.GetTransactionStatus[]): {
   getTransaction: (hash: string) => Promise<Api.GetTransactionResponse>;
 } & {
   getTransaction: ReturnType<typeof vi.fn>;
@@ -31,14 +239,14 @@ function fakeServer(statuses: readonly Api.GetTransactionStatus[]): {
 
 describe("waitForStellarConfirmation", () => {
   it("returns SUCCESS once the transaction is no longer NOT_FOUND and succeeded", async () => {
-    const server = fakeServer([NOT_FOUND, NOT_FOUND, SUCCESS]);
+    const server = fakeGetTransactionServer([NOT_FOUND_STATUS, NOT_FOUND_STATUS, SUCCESS]);
     const status = await waitForStellarConfirmation(server, "deadbeef", 10, 1);
     expect(status).toBe(SUCCESS);
     expect(server.getTransaction).toHaveBeenCalledTimes(3);
   });
 
   it("returns FAILED without throwing — the caller decides what a failure means", async () => {
-    const server = fakeServer([NOT_FOUND, FAILED]);
+    const server = fakeGetTransactionServer([NOT_FOUND_STATUS, FAILED]);
     const status = await waitForStellarConfirmation(server, "deadbeef", 10, 1);
     expect(status).toBe(FAILED);
   });
@@ -47,17 +255,38 @@ describe("waitForStellarConfirmation", () => {
     // Regression guard for the exact real bug: an early version effectively treated the FIRST
     // response (always NOT_FOUND immediately after submission) as final, returning before real
     // ledger inclusion. This test fails if that regresses — it demands multiple real polls.
-    const server = fakeServer([NOT_FOUND, NOT_FOUND, NOT_FOUND, NOT_FOUND, SUCCESS]);
+    const server = fakeGetTransactionServer([
+      NOT_FOUND_STATUS,
+      NOT_FOUND_STATUS,
+      NOT_FOUND_STATUS,
+      NOT_FOUND_STATUS,
+      SUCCESS,
+    ]);
     const status = await waitForStellarConfirmation(server, "deadbeef", 10, 1);
     expect(status).toBe(SUCCESS);
     expect(server.getTransaction).toHaveBeenCalledTimes(5);
   });
 
   it("throws after maxAttempts if the transaction is never found", async () => {
-    const server = fakeServer([NOT_FOUND]);
+    const server = fakeGetTransactionServer([NOT_FOUND_STATUS]);
     await expect(waitForStellarConfirmation(server, "deadbeef", 3, 1)).rejects.toThrow(
       /not found after/,
     );
     expect(server.getTransaction).toHaveBeenCalledTimes(3);
+  });
+
+  it("polls until a non-NOT_FOUND status is returned (rejection-recheck fixture shape)", async () => {
+    let calls = 0;
+    const server: Pick<Server, "getTransaction"> = {
+      async getTransaction(): Promise<Api.GetTransactionResponse> {
+        calls += 1;
+        return calls < 2 ? NOT_FOUND : successResponse("h");
+      },
+    };
+
+    const status = await waitForStellarConfirmation(server, "h", 5, 1);
+
+    expect(status).toBe("SUCCESS");
+    expect(calls).toBe(2);
   });
 });

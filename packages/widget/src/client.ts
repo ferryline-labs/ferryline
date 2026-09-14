@@ -14,6 +14,8 @@
  *    when it structurally can't" (STEP 2 assignment) means at the code level: there is no code path
  *    where a testnet widget instance even holds a USDT0 adapter to accidentally route to.
  */
+import { Buffer } from "buffer";
+
 import { TransactionBuilder } from "@stellar/stellar-sdk";
 import { Api, Server } from "@stellar/stellar-sdk/rpc";
 import { createPublicClient, http } from "viem";
@@ -139,12 +141,7 @@ export function createWidgetClient(config: WidgetClientConfig): WidgetClient {
           "submitStellarTransaction: expected a plain (non-fee-bump) transaction envelope",
         );
       }
-      const sent = await server.sendTransaction(tx);
-      if (sent.status !== "PENDING" && sent.status !== "DUPLICATE") {
-        throw new Error(
-          `submission rejected: ${sent.status}${"errorResult" in sent && sent.errorResult ? ` (${sent.errorResult.toXDR("base64")})` : ""}`,
-        );
-      }
+      const hash = await submitStellarTransactionWithRejectionRecheck(server, tx);
       // Real, load-bearing wait: `sendTransaction` returns as soon as the network accepts the
       // envelope into its mempool, well before ledger inclusion — NOT confirmation. A caller that
       // treats this hash as "confirmed" and immediately calls `prepareStep` for a step whose build
@@ -154,13 +151,83 @@ export function createWidgetClient(config: WidgetClientConfig): WidgetClient {
       // burn needs 0.5000000; submit the approve step and wait for it to confirm before preparing
       // the burn." Same real wait-for-confirmation pattern as STEP 1's proven outbound seam script
       // (experiments/widget-seam-outbound-cctp.ts's own waitForTransaction).
-      const status = await waitForStellarConfirmation(server, sent.hash);
+      const status = await waitForStellarConfirmation(server, hash);
       if (status !== "SUCCESS") {
-        throw new Error(`transaction ${sent.hash} did not succeed: ${status}`);
+        throw new Error(`transaction ${hash} did not succeed: ${status}`);
       }
-      return sent.hash;
+      return hash;
     },
   };
+}
+
+/** Bounded retry/recheck window for {@link submitStellarTransactionWithRejectionRecheck}: short
+ *  enough not to stall the caller for long on a genuine failure, but enough real attempts to ride
+ *  out the transient RPC-node staleness this exists for (see that function's own doc comment). */
+const REJECTION_RECHECK_MAX_ATTEMPTS = 3;
+const REJECTION_RECHECK_DELAY_MS = 2000;
+
+/**
+ * Submits an already-signed transaction, defensively handling a real, observed class of false
+ * failure: `sendTransaction` reporting a rejection (e.g. `tx_bad_seq`) for a transaction that was, in
+ * fact, valid and is later included successfully on-chain anyway — confirmed independently, twice,
+ * via direct Horizon queries during this widget's own real testnet E2E testing. This is a genuine
+ * Soroban RPC-node-side staleness/timing issue (the node's own local sequence-number pre-check
+ * lagging the network's actual, current state), not a Ferryline bug, and not something that can be
+ * prevented — only defended against.
+ *
+ * The defense: on a rejection, do NOT immediately throw. Instead, independently check whether the
+ * exact transaction actually landed on-chain anyway, via `getTransaction` keyed on the hash computed
+ * *locally* from the signed envelope (`tx.hash()` — synchronous, no RPC round trip, so it's available
+ * and trustworthy even though `sendTransaction`'s own returned `hash` on a rejected response should
+ * not be relied on). Same "verify real on-chain state before deciding what happened" pattern already
+ * used by the relayer's `reconcileSubmitting` (work/reconcile.ts) and by `feeBumpHashHex`
+ * (work/submit.ts) for computing a trustworthy hash from a signed envelope up front.
+ *
+ * If `getTransaction` finds it landed (any status other than NOT_FOUND): treat this as success and
+ * return the hash — no error surfaces to the caller. If not found: retry submission of the exact same
+ * already-signed XDR (never rebuilt with a fresh sequence number — resubmitting the identical envelope
+ * is what keeps a retry from becoming its own double-submission risk; a genuinely-landed transaction
+ * resubmitted this way comes back "DUPLICATE", not a second real submission) a short, bounded number
+ * of times, with a brief wait between attempts. Only once that window is exhausted without the
+ * transaction ever being found does this surface as a genuine failure.
+ *
+ * Exported (not just inlined into submitStellarTransaction) so this can be unit-tested directly
+ * against a fake `Server`-shaped object — see client.test.ts.
+ */
+export async function submitStellarTransactionWithRejectionRecheck(
+  server: Pick<Server, "sendTransaction" | "getTransaction">,
+  tx: Parameters<Server["sendTransaction"]>[0],
+  maxAttempts = REJECTION_RECHECK_MAX_ATTEMPTS,
+  retryDelayMs = REJECTION_RECHECK_DELAY_MS,
+): Promise<string> {
+  // Computed once, locally, from the signed envelope — independent of anything sendTransaction
+  // returns, and stable across every retry below since the envelope itself is never rebuilt.
+  const hash = Buffer.from(tx.hash()).toString("hex");
+
+  let lastRejection: unknown;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const sent = await server.sendTransaction(tx);
+    if (sent.status === "PENDING" || sent.status === "DUPLICATE") {
+      return hash;
+    }
+    lastRejection = new Error(
+      `submission rejected: ${sent.status}${"errorResult" in sent && sent.errorResult ? ` (${sent.errorResult.toXDR("base64")})` : ""}`,
+    );
+    // Rejected (this attempt's own view) — before giving up, check real on-chain state directly:
+    // maybe it landed anyway (the false-failure case this function exists for), in which case this
+    // rejection was simply wrong and there is nothing to retry or report.
+    const result = await server.getTransaction(hash);
+    if (result.status !== Api.GetTransactionStatus.NOT_FOUND) {
+      return hash;
+    }
+    // Genuinely not found yet. Only worth another attempt if we have one left.
+    if (attempt < maxAttempts - 1) {
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    }
+  }
+  throw lastRejection instanceof Error
+    ? lastRejection
+    : new Error(`transaction ${hash}: submission rejected and never found on-chain`);
 }
 
 /**
