@@ -349,6 +349,18 @@ describe("outbound quote (Stellar -> Base) against recorded mainnet responses", 
     });
     expect(quote.checks.find((c) => c.id === "sender-format")?.ok).toBe(false);
   });
+
+  it("rejects an EVM recipient with a broken checksum, even though it's the right length/hex (real bug this guards against: a corrupted-case address is otherwise indistinguishable from a real one)", async () => {
+    const { adapter } = harness();
+    // BASE_RECIPIENT correctly checksummed is 0x7bE6FA75805d77Bc3FE8F004bbEc49f7d4f1AC50; flipping
+    // just the 4th character's case (b -> B) keeps it 0x + 40 valid hex chars, so a plain format
+    // regex accepts it — but it is not the real address, and a real wallet/explorer would flag it.
+    const badChecksum = "0x7BE6FA75805d77Bc3FE8F004bbEc49f7d4f1AC50";
+    const quote = await adapter.quote({ ...outbound, to: { chain: "base", address: badChecksum } });
+    const recipientCheck = quote.checks.find((c) => c.id === "recipient-format");
+    expect(recipientCheck?.ok).toBe(false);
+    expect(recipientCheck?.message).toContain("checksum");
+  });
 });
 
 describe("outbound build: approve first, then deposit_for_burn", () => {
@@ -522,6 +534,21 @@ describe("inbound step builder (EVM -> Stellar via CctpForwarder)", () => {
       parameters: { maxFee: "0", minFinalityThreshold: 1000 },
     });
     expect(underpaid.checks.find((c) => c.id === "route-limits")?.ok).toBe(false);
+  });
+
+  it("rejects an EVM sender with a broken checksum, even though it's the right length/hex", async () => {
+    const { adapter } = harness({ fees: INBOUND_FEES });
+    // Same real-bug class as the outbound recipient-format test above: 0x + 40 valid hex chars,
+    // wrong checksum — a plain format regex can't tell this apart from the real address. For
+    // inbound, resolveEvmRefund defaults refundAddress to request.from.address and throws hard
+    // (REFUND_ADDRESS_INVALID) before quote() returns at all, rather than only recording a soft
+    // "sender-format" check failure — pre-existing behavior, unchanged by this fix, just now also
+    // catching a bad checksum the old format-only regex could not.
+    const badChecksum = "0x7BE6FA75805d77Bc3FE8F004bbEc49f7d4f1AC50";
+    await expectCode(
+      adapter.quote({ ...inbound, from: { chain: "ethereum", address: badChecksum } }),
+      "REFUND_ADDRESS_INVALID",
+    );
   });
 
   it("always burns toward the CctpForwarder in both fields and carries the recipient in hook data", async () => {

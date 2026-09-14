@@ -28,11 +28,11 @@ import type { Account } from "@stellar/stellar-sdk";
 import { Buffer } from "buffer";
 import { Api } from "@stellar/stellar-sdk/rpc";
 import type { Spec } from "@stellar/stellar-sdk/contract";
+import { isAddress } from "viem";
 
 import { USDT0_STELLAR_MAINNET, evmUsdt0Chain, type EvmUsdt0Chain } from "./chains.js";
 import {
   ERC20_ABI,
-  EVM_ADDRESS,
   encodeApprove,
   encodeSend,
   quoteOftOnEvm,
@@ -343,12 +343,14 @@ export class Usdt0LayerZeroAdapter implements RailAdapter {
     } else {
       checks.push(check("sender-format", true, `${sender.kind} sender`));
     }
-    const recipientOk = EVM_ADDRESS.test(request.to.address);
+    const recipientOk = isAddress(request.to.address);
     checks.push(
       check(
         "recipient-format",
         recipientOk,
-        recipientOk ? "EVM address" : "recipient must be a 0x-prefixed 20-byte hex address",
+        recipientOk
+          ? "EVM address"
+          : "recipient must be a 0x-prefixed 20-byte hex address with a valid checksum",
       ),
     );
     const refundAddress = this.resolveStellarRefund(request);
@@ -632,12 +634,14 @@ export class Usdt0LayerZeroAdapter implements RailAdapter {
       );
     }
     const checks: PreflightCheck[] = [];
-    const senderOk = EVM_ADDRESS.test(request.from.address);
+    const senderOk = isAddress(request.from.address);
     checks.push(
       check(
         "sender-format",
         senderOk,
-        senderOk ? "EVM address" : "sender must be a 0x-prefixed 20-byte hex address",
+        senderOk
+          ? "EVM address"
+          : "sender must be a 0x-prefixed 20-byte hex address with a valid checksum",
       ),
     );
     checks.push(check("recipient-format", true, "G account"));
@@ -677,7 +681,7 @@ export class Usdt0LayerZeroAdapter implements RailAdapter {
     });
 
     if (senderOk) {
-      const sender = request.from.address as `0x${string}`;
+      const sender = request.from.address;
       const balance = (await reader.readContract({
         address: source.innerToken,
         abi: ERC20_ABI,
@@ -723,7 +727,7 @@ export class Usdt0LayerZeroAdapter implements RailAdapter {
       this.quotes.set(quote, {
         direction: "in",
         source,
-        sender: request.from.address as `0x${string}`,
+        sender: request.from.address,
         recipient: request.to.address,
         sendParam: { ...sendParam, minAmountLD: oft.amountReceivedLD },
         fee,
@@ -733,7 +737,7 @@ export class Usdt0LayerZeroAdapter implements RailAdapter {
   }
 
   private async buildInbound(quote: Quote, priv: InboundPrivate): Promise<BuiltTransfer> {
-    if (!EVM_ADDRESS.test(quote.refundAddress)) {
+    if (!isAddress(quote.refundAddress)) {
       throw new FerrylineError(
         "REFUND_ADDRESS_INVALID",
         "refund address must be an EVM address for an EVM-originated transfer",
@@ -755,7 +759,7 @@ export class Usdt0LayerZeroAdapter implements RailAdapter {
       chain: priv.source.chain,
       kind: "evm-transaction",
       to: priv.source.oft,
-      data: encodeSend(priv.sendParam, priv.fee, quote.refundAddress as `0x${string}`),
+      data: encodeSend(priv.sendParam, priv.fee, quote.refundAddress),
       value: priv.fee.nativeFee,
       description: `Send ${formatAmount(quote.debit)} USDT0 to Stellar via LayerZero`,
     });
@@ -808,10 +812,10 @@ export class Usdt0LayerZeroAdapter implements RailAdapter {
 
   private resolveEvmRefund(request: TransferRequest): string {
     const candidate = request.refundAddress ?? request.from.address;
-    if (!EVM_ADDRESS.test(candidate)) {
+    if (!isAddress(candidate)) {
       throw new FerrylineError(
         "REFUND_ADDRESS_INVALID",
-        "refund address must be a 0x-prefixed 20-byte hex address",
+        "refund address must be a 0x-prefixed 20-byte hex address with a valid checksum",
       );
     }
     return candidate;

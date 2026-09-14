@@ -149,6 +149,20 @@ describe("outbound quote (Stellar -> Polygon) against recorded mainnet responses
     expect(order).toEqual(["quote_oft@CBOW", "quote_send@CBOW"]);
   });
 
+  it("rejects an EVM recipient with a broken checksum, even though it's the right length/hex (real bug: a corrupted-case address passes a plain format regex but is not the real address)", async () => {
+    const { adapter } = harness();
+    // POLYGON_RECIPIENT correctly checksummed is 0xE4b5FcCE3CFBc86FDBb9FaE472B14EEA68fB301F;
+    // flipping the first hex character's case (e -> E) keeps it 0x + 40 valid hex chars.
+    const badChecksum = "0xE4b5FcCE3CFBc86FDBb9FaE472B14EEA68fB301f";
+    const quote = await adapter.quote({
+      ...outbound,
+      to: { chain: "polygon", address: badChecksum },
+    });
+    const recipientCheck = quote.checks.find((c) => c.id === "recipient-format");
+    expect(recipientCheck?.ok).toBe(false);
+    expect(recipientCheck?.message).toContain("checksum");
+  });
+
   it("fails the sender-trustline check when the sender holds no USDT0 trustline", async () => {
     const { adapter } = harness({ withoutTrustline: true });
     const quote = await adapter.quote(outbound);
@@ -288,6 +302,17 @@ describe("inbound (EVM -> Stellar)", () => {
         },
       }),
       "UNSUPPORTED_RECIPIENT_KIND",
+    );
+  });
+
+  it("rejects an EVM sender with a broken checksum via REFUND_ADDRESS_INVALID (resolveEvmRefund defaults refundAddress to request.from.address and throws hard, before quote() returns any soft check)", async () => {
+    const { adapter } = harness();
+    // Same real-bug class as the outbound recipient-format test above: 0x + 40 valid hex chars,
+    // wrong checksum.
+    const badChecksum = "0xE4b5FcCE3CFBc86FDBb9FaE472B14EEA68fB301f";
+    await expectCode(
+      adapter.quote({ ...inbound, from: { chain: "polygon", address: badChecksum } }),
+      "REFUND_ADDRESS_INVALID",
     );
   });
 

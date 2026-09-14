@@ -98,3 +98,21 @@ All notable changes to `@ferryline/sdk` are documented in this file. Format loos
   caller to have exercised it against a malformed-length value. See
   [`packages/core/VERIFIED.md`](../core/VERIFIED.md) for the upstream evidence and
   `packages/sdk/src/rails/usdc-cctp/stellar.test.ts` for the regression test.
+
+- **2026-09-14 — every EVM address check (`usdc-cctp` and `usdt0-layerzero`, both rails: recipient,
+  sender, and refund-address resolution — 7 call sites total) validated format only (`0x` + 40 hex
+  characters via a plain regex), not the EIP-55 mixed-case checksum.** A syntactically valid but
+  genuinely wrong address — for example a single flipped letter-case in an otherwise-correct
+  address, `0x7BE6FA75805d77Bc3FE8F004bbEc49f7d4f1AC50` instead of the real
+  `0x7bE6FA75805d77Bc3FE8F004bbEc49f7d4f1AC50` — passed every check silently. All-lowercase and
+  all-uppercase input (both checksum-agnostic under EIP-55) are unaffected and still accepted, so
+  this closes a real gap without rejecting legitimate input any real wallet or explorer would
+  accept. Found while manually double-checking a real address before a real mainnet USDT0 send
+  (see `packages/core/verified/experiments/2026-09-14-widget-usdt0-mainnet-outbound.md`) — the SDK
+  itself would not have caught a copy-paste checksum error the way that manual check did. Fixed by
+  replacing the internal format-only checks with `viem`'s `isAddress` (already an SDK dependency).
+  The public `EVM_ADDRESS` export (`packages/sdk/src/evm/reader.ts`) is UNCHANGED — it remains the
+  same format-only regex it always was, since it's public API and this fix only tightens Ferryline's
+  own internal validation, not that exported contract. Four new tests added (two adapters x
+  recipient/sender), each proving the exact same-length, same-hex, wrong-checksum scenario is now
+  rejected.
