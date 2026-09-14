@@ -130,7 +130,13 @@ describe("submitStellarTransactionWithRejectionRecheck", () => {
       getTransactionResults: [successResponse(realHash)],
     });
 
-    const hash = await submitStellarTransactionWithRejectionRecheck(server, tx);
+    const hash = await submitStellarTransactionWithRejectionRecheck(
+      server,
+      tx,
+      /* maxAttempts */ 2,
+      /* confirmationMaxAttempts */ 5,
+      /* confirmationPollIntervalMs */ 1,
+    );
 
     // Must return the LOCALLY-computed hash (from tx.hash()), not whatever sendTransaction's own
     // rejected response happened to carry.
@@ -139,11 +145,14 @@ describe("submitStellarTransactionWithRejectionRecheck", () => {
     expect(server.getTransactionCalls).toBe(1);
   });
 
-  it("sendTransaction rejects, not found on first recheck, found on a later retry: still returns success", async () => {
+  it("sendTransaction rejects, not found on the first on-chain recheck, found on a later resubmit: still returns success", async () => {
     const tx = realSignedTransaction();
     const realHash = Buffer.from(tx.hash()).toString("hex");
     const server = fakeServer({
       sendTransactionResults: [rejected(realHash), rejected(realHash)],
+      // First rejection's recheck: waitForStellarConfirmation polls once (confirmationMaxAttempts=1
+      // below) and times out NOT_FOUND, triggering an outer resubmit. Second rejection's recheck
+      // finds it.
       getTransactionResults: [NOT_FOUND, successResponse(realHash)],
     });
 
@@ -151,7 +160,8 @@ describe("submitStellarTransactionWithRejectionRecheck", () => {
       server,
       tx,
       /* maxAttempts */ 3,
-      /* retryDelayMs */ 1,
+      /* confirmationMaxAttempts */ 1,
+      /* confirmationPollIntervalMs */ 1,
     );
 
     expect(hash).toBe(realHash);
@@ -172,7 +182,8 @@ describe("submitStellarTransactionWithRejectionRecheck", () => {
         server,
         tx,
         /* maxAttempts */ 3,
-        /* retryDelayMs */ 1,
+        /* confirmationMaxAttempts */ 1,
+        /* confirmationPollIntervalMs */ 1,
       ),
     ).rejects.toThrow(/submission rejected/);
 
@@ -180,6 +191,47 @@ describe("submitStellarTransactionWithRejectionRecheck", () => {
     // stop).
     expect(server.sendTransactionCalls).toBe(3);
     expect(server.getTransactionCalls).toBe(3);
+  });
+
+  it("a resolved on-chain FAILED status (not just NOT_FOUND) is surfaced as a genuine failure without exhausting the outer retries", async () => {
+    const tx = realSignedTransaction();
+    const realHash = Buffer.from(tx.hash()).toString("hex");
+    const server = fakeServer({
+      sendTransactionResults: [rejected(realHash)],
+      getTransactionResults: [
+        {
+          status: Api.GetTransactionStatus.FAILED,
+          txHash: realHash,
+          latestLedger: 1,
+          latestLedgerCloseTime: 1,
+          oldestLedger: 1,
+          oldestLedgerCloseTime: 1,
+          ledger: 1,
+          createdAt: 1,
+          applicationOrder: 1,
+          feeBump: false,
+          envelopeXdr: {} as Api.GetFailedTransactionResponse["envelopeXdr"],
+          resultXdr: {} as Api.GetFailedTransactionResponse["resultXdr"],
+          resultMetaXdr: {} as Api.GetFailedTransactionResponse["resultMetaXdr"],
+          events: {} as Api.GetFailedTransactionResponse["events"],
+        },
+      ],
+    });
+
+    await expect(
+      submitStellarTransactionWithRejectionRecheck(
+        server,
+        tx,
+        /* maxAttempts */ 3,
+        /* confirmationMaxAttempts */ 1,
+        /* confirmationPollIntervalMs */ 1,
+      ),
+    ).rejects.toThrow(/did not succeed: FAILED/);
+
+    // A resolved FAILED is definite, real on-chain state, not ambiguous "not found yet": only one
+    // send/recheck pair should happen, not the full outer retry budget.
+    expect(server.sendTransactionCalls).toBe(1);
+    expect(server.getTransactionCalls).toBe(1);
   });
 
   it("retries resubmit the SAME signed transaction object, never rebuilding it", async () => {
@@ -204,7 +256,8 @@ describe("submitStellarTransactionWithRejectionRecheck", () => {
       server,
       tx,
       /* maxAttempts */ 3,
-      /* retryDelayMs */ 1,
+      /* confirmationMaxAttempts */ 1,
+      /* confirmationPollIntervalMs */ 1,
     );
 
     expect(hash).toBe(realHash);

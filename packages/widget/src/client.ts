@@ -160,45 +160,57 @@ export function createWidgetClient(config: WidgetClientConfig): WidgetClient {
   };
 }
 
-/** Bounded retry/recheck window for {@link submitStellarTransactionWithRejectionRecheck}: short
- *  enough not to stall the caller for long on a genuine failure, but enough real attempts to ride
- *  out the transient RPC-node staleness this exists for (see that function's own doc comment). */
-const REJECTION_RECHECK_MAX_ATTEMPTS = 3;
-const REJECTION_RECHECK_DELAY_MS = 2000;
+/** Bounded retry count for {@link submitStellarTransactionWithRejectionRecheck}'s outer resubmit
+ *  loop: how many times a still-genuinely-missing transaction gets resubmitted, not how long each
+ *  on-chain recheck itself waits (that reuses {@link waitForStellarConfirmation}'s own, already-
+ *  proven 60s ledger-close budget — see this function's own doc comment for why a shorter,
+ *  bespoke window was tried first and found insufficient). */
+const REJECTION_RECHECK_MAX_ATTEMPTS = 2;
 
 /**
  * Submits an already-signed transaction, defensively handling a real, observed class of false
  * failure: `sendTransaction` reporting a rejection (e.g. `tx_bad_seq`) for a transaction that was, in
- * fact, valid and is later included successfully on-chain anyway — confirmed independently, twice,
- * via direct Horizon queries during this widget's own real testnet E2E testing. This is a genuine
- * Soroban RPC-node-side staleness/timing issue (the node's own local sequence-number pre-check
- * lagging the network's actual, current state), not a Ferryline bug, and not something that can be
- * prevented — only defended against.
+ * fact, valid and is later included successfully on-chain anyway — confirmed independently, three
+ * times now, via direct Horizon queries during this widget's own real testnet E2E testing. This is a
+ * genuine Soroban RPC-node-side staleness/timing issue (the node's own local sequence-number
+ * pre-check lagging the network's actual, current state), not a Ferryline bug, and not something that
+ * can be prevented, only defended against.
  *
  * The defense: on a rejection, do NOT immediately throw. Instead, independently check whether the
  * exact transaction actually landed on-chain anyway, via `getTransaction` keyed on the hash computed
- * *locally* from the signed envelope (`tx.hash()` — synchronous, no RPC round trip, so it's available
+ * *locally* from the signed envelope (`tx.hash()`, synchronous, no RPC round trip, so it's available
  * and trustworthy even though `sendTransaction`'s own returned `hash` on a rejected response should
  * not be relied on). Same "verify real on-chain state before deciding what happened" pattern already
  * used by the relayer's `reconcileSubmitting` (work/reconcile.ts) and by `feeBumpHashHex`
  * (work/submit.ts) for computing a trustworthy hash from a signed envelope up front.
  *
- * If `getTransaction` finds it landed (any status other than NOT_FOUND): treat this as success and
- * return the hash — no error surfaces to the caller. If not found: retry submission of the exact same
- * already-signed XDR (never rebuilt with a fresh sequence number — resubmitting the identical envelope
- * is what keeps a retry from becoming its own double-submission risk; a genuinely-landed transaction
- * resubmitted this way comes back "DUPLICATE", not a second real submission) a short, bounded number
- * of times, with a brief wait between attempts. Only once that window is exhausted without the
- * transaction ever being found does this surface as a genuine failure.
+ * That on-chain recheck reuses {@link waitForStellarConfirmation} itself, at its own default (~60s)
+ * budget, rather than a short, bespoke poll: an early version of this function used a 2-attempt,
+ * 2-second-apart check (a few seconds total), which a real testnet run proved was not long enough.
+ * Horizon later confirmed the exact rejected transaction from that run had landed successfully, at
+ * 2026-09-14T20:52:02Z, well outside that short window, the same real "rejected but actually valid"
+ * case this function exists to defend against, just not caught by too tight a timeout. Ledger close
+ * (~5-6s) plus the same RPC-node staleness this function is already working around means the wait
+ * needs the same generous, already-proven budget the success path uses, not a separate, shorter one.
+ *
+ * If `waitForStellarConfirmation` finds it landed (`SUCCESS`, or any resolved non-NOT_FOUND status):
+ * treat this as success and return the hash, no error surfaces to the caller (a non-`SUCCESS` resolved
+ * status, e.g. `FAILED`, is a genuine, real on-chain failure and is surfaced as such). If it times out
+ * still not found: retry submission of the exact same already-signed XDR (never rebuilt with a fresh
+ * sequence number — resubmitting the identical envelope is what keeps a retry from becoming its own
+ * double-submission risk; a genuinely-landed transaction resubmitted this way comes back "DUPLICATE",
+ * not a second real submission) a small, bounded number of times. Only once that outer bound is
+ * exhausted without the transaction ever being found does this surface as a genuine failure.
  *
  * Exported (not just inlined into submitStellarTransaction) so this can be unit-tested directly
- * against a fake `Server`-shaped object — see client.test.ts.
+ * against a fake `Server`-shaped object, see client.test.ts.
  */
 export async function submitStellarTransactionWithRejectionRecheck(
   server: Pick<Server, "sendTransaction" | "getTransaction">,
   tx: Parameters<Server["sendTransaction"]>[0],
   maxAttempts = REJECTION_RECHECK_MAX_ATTEMPTS,
-  retryDelayMs = REJECTION_RECHECK_DELAY_MS,
+  confirmationMaxAttempts?: number,
+  confirmationPollIntervalMs?: number,
 ): Promise<string> {
   // Computed once, locally, from the signed envelope — independent of anything sendTransaction
   // returns, and stable across every retry below since the envelope itself is never rebuilt.
@@ -213,16 +225,31 @@ export async function submitStellarTransactionWithRejectionRecheck(
     lastRejection = new Error(
       `submission rejected: ${sent.status}${"errorResult" in sent && sent.errorResult ? ` (${sent.errorResult.toXDR("base64")})` : ""}`,
     );
-    // Rejected (this attempt's own view) — before giving up, check real on-chain state directly:
-    // maybe it landed anyway (the false-failure case this function exists for), in which case this
-    // rejection was simply wrong and there is nothing to retry or report.
-    const result = await server.getTransaction(hash);
-    if (result.status !== Api.GetTransactionStatus.NOT_FOUND) {
-      return hash;
-    }
-    // Genuinely not found yet. Only worth another attempt if we have one left.
-    if (attempt < maxAttempts - 1) {
-      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    // Rejected (this attempt's own view) — before giving up, check real on-chain state directly, at
+    // the same generous budget the success path already trusts: maybe it landed anyway (the
+    // false-failure case this function exists for), in which case this rejection was simply wrong
+    // and there is nothing to retry or report.
+    try {
+      const status = await waitForStellarConfirmation(
+        server,
+        hash,
+        confirmationMaxAttempts,
+        confirmationPollIntervalMs,
+      );
+      if (status === "SUCCESS") {
+        return hash;
+      }
+      // A resolved, non-SUCCESS status (e.g. FAILED) is a genuine, real on-chain outcome, not a
+      // "maybe it landed" ambiguity, surface it as-is rather than retrying a definite failure.
+      throw new Error(`transaction ${hash} did not succeed: ${status}`);
+    } catch (confirmError) {
+      // waitForStellarConfirmation itself throws only on its own timeout (still NOT_FOUND after its
+      // whole budget) — genuinely not found yet, not a definite on-chain failure. Fall through to
+      // this function's own outer retry rather than surfacing this timeout directly, so a resubmit
+      // is attempted before giving up entirely.
+      if (!(confirmError instanceof Error) || !confirmError.message.includes("not found after")) {
+        throw confirmError;
+      }
     }
   }
   throw lastRejection instanceof Error
