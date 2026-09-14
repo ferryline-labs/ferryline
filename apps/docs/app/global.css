@@ -41,6 +41,22 @@
   --color-fd-ring: #000000;
 }
 
+/*
+ * fumadocs-ui's own default for this ("--fd-layout-width", read via `var(--fd-layout-width,
+ * 97rem)` on its docs-layout grid, confirmed directly from its real inline style rather than
+ * assumed) caps the sidebar+main+toc content at 97rem (1552px) and lets the two outer grid
+ * columns absorb everything past that as empty margin. On a wide monitor that's a real, visible
+ * amount of dead space either side of the sidebar — verified directly via computed
+ * grid-template-columns, not just eyeballed from a screenshot: at a 2048px-wide window, the
+ * default left/right margins are 248px each; at 120rem they drop to 64px, and the main content
+ * column (where the wide code blocks and tables on this site actually live) grows from 1016px to
+ * 1384px. `--fd-layout-width` is fumadocs-ui's own documented customization point for exactly
+ * this — set once here, it cascades down to the inline style that reads it.
+ */
+:root {
+  --fd-layout-width: 120rem;
+}
+
 @layer base {
   html {
     scroll-behavior: smooth;
