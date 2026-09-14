@@ -135,7 +135,7 @@ Owns three genuinely non-trivial primitives, each with its own dedicated test fi
 
 ### `@ferryline/sdk`
 
-Path: [packages/sdk](packages/sdk) · 83 tests.
+Path: [packages/sdk](packages/sdk) · 95 tests.
 
 ```ts
 // packages/sdk/src/index.ts (real, current shape)
@@ -203,7 +203,7 @@ verification work (see [Testing strategy](#testing-strategy)).
 
 ### `ferryline-relayer`
 
-Path: [packages/relayer](packages/relayer) · 185 unit/component tests + 37 live-database
+Path: [packages/relayer](packages/relayer) · 196 unit/component tests + 37 live-database
 integration tests · Fastify + PostgreSQL, Dockerised, self-hostable.
 
 Completes CCTP transfers in **both directions**: inbound (EVM → Stellar) and outbound
@@ -243,7 +243,7 @@ pending ──(Iris attestation completes)──► attested ──(mint_and_for
 
 ### `@ferryline/widget`
 
-Path: [packages/widget](packages/widget) · 34 tests · a plain Web Component, no framework
+Path: [packages/widget](packages/widget) · 35 tests · a plain Web Component, no framework
 wrapper.
 
 `<ferryline-widget>` wires together, in one custom element: a real `Ferryline` SDK instance with

@@ -1,6 +1,6 @@
 {
   "name": "@ferryline/sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "One interface for moving USDT0 and USDC in and out of Stellar: quote, build, sign, track.",
   "license": "Apache-2.0",
   "repository": {
