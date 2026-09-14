@@ -17,6 +17,7 @@
  */
 import { formatAmount } from "@ferryline/core";
 import type { ChainSlug } from "@ferryline/core";
+import { isFinalStep } from "@ferryline/sdk";
 import type {
   AssetSymbol,
   BuiltTransfer,
@@ -310,8 +311,8 @@ export class FerrylineWidget extends HTMLElement {
     built: BuiltTransfer,
     stepIndex: number,
   ): Promise<void> {
-    const nextIndex = stepIndex + 1;
-    if (nextIndex < built.steps.length) {
+    if (!isFinalStep(built, stepIndex)) {
+      const nextIndex = stepIndex + 1;
       this.setPhase(signedAwaitingNextStep({ quote, built, stepIndex: nextIndex }));
       const nextStep = await this.client().ferryline.prepareStep(built.transferId, nextIndex);
       const rebuilt = {
@@ -321,16 +322,17 @@ export class FerrylineWidget extends HTMLElement {
       this.setPhase(buildSucceeded(quote, rebuilt, nextIndex));
       return;
     }
-    // This IS the final step (isFinalStep(built, stepIndex) === true here, by construction: we
-    // just confirmed there is no nextIndex) — the one, correct point to trigger outbound relayer
-    // registration. Real bug this project already shipped and fixed: calling
-    // registerOutboundTransfer from inside markSubmitted itself (which fires after EVERY step,
-    // including an outbound transfer's approve step before its burn) sent the WRONG tx hash first
-    // and caused the correct, later registration to be rejected as a duplicate by the relayer's own
-    // transferId primary key — see @ferryline/sdk's registerOutboundTransfer/isFinalStep doc
-    // comments for the full story. Fire-and-forget (never awaited into the caller's own flow
-    // beyond this): registerOutboundTransfer itself never throws and gates itself off entirely for
-    // inbound/non-CCTP transfers and when no relayer is configured — see its own doc comment.
+    // This IS the final step (isFinalStep(built, stepIndex) === true — imported from
+    // @ferryline/sdk, the same canonical, tested comparison the SDK ships specifically so no
+    // caller reimplements it) — the one, correct point to trigger outbound relayer registration.
+    // Real bug this project already shipped and fixed: calling registerOutboundTransfer from
+    // inside markSubmitted itself (which fires after EVERY step, including an outbound transfer's
+    // approve step before its burn) sent the WRONG tx hash first and caused the correct, later
+    // registration to be rejected as a duplicate by the relayer's own transferId primary key — see
+    // @ferryline/sdk's registerOutboundTransfer/isFinalStep doc comments for the full story.
+    // Fire-and-forget (never awaited into the caller's own flow beyond this): registerOutboundTransfer
+    // itself never throws and gates itself off entirely for inbound/non-CCTP transfers and when no
+    // relayer is configured — see its own doc comment.
     await this.client().ferryline.registerOutboundTransfer(built.transferId);
     // Seed a "tracking" phase immediately, before the first real status arrives — track()'s first
     // yield can lag by however long the RPC/Horizon round-trip takes, and without this the UI would
