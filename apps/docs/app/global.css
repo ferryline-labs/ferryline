@@ -1,0 +1,70 @@
+@import "tailwindcss";
+@import "fumadocs-ui/css/neutral.css";
+@import "fumadocs-ui/css/preset.css";
+@config "../tailwind.config.ts";
+
+/*
+ * fumadocs-ui's own chrome (sidebar, search, nav, callouts) reads color from these --color-fd-*
+ * variables directly, independent of the Tailwind `theme.colors` values @ferryline/design-tokens
+ * provides (those only reach Tailwind *utility classes*, e.g. `bg-brand`, that this app's own
+ * pages use directly). Mapped here to the exact same real hex values rather than left on
+ * fumadocs-ui's own neutral preset, so the docs site's chrome matches apps/site's brand, not a
+ * generic gray theme.
+ *
+ * Only light-mode values are set (matching apps/site's own "no dark mode" choice — the reference
+ * design has none to invert, see @ferryline/design-tokens' file-level comment) — the root layout
+ * passes `theme={{ enabled: false }}` to fumadocs-ui's RootProvider, so its `.dark` variant of
+ * these variables is never applied.
+ *
+ * Disclosed gap, not silently reused or invented: fumadocs-ui's semantic `--color-fd-info`/
+ * `-warning`/`-error`/`-success`/`-idea`/`-diff-*` variables (used inside its Callout/diff
+ * components) have no equivalent role anywhere in @ferryline/design-tokens — apps/site has no
+ * callout or diff component, so there is no real audited value to port. Left on fumadocs-ui's own
+ * defaults rather than inventing brand-tinted versions that aren't grounded in a real source.
+ */
+@theme {
+  --color-fd-background: #ffffff;
+  --color-fd-foreground: #000000;
+  --color-fd-muted: #eff0f0;
+  --color-fd-muted-foreground: #66696b;
+  --color-fd-popover: #eff0f0;
+  --color-fd-popover-foreground: #000000;
+  --color-fd-card: #eff0f0;
+  --color-fd-card-foreground: #000000;
+  --color-fd-border: #c5c7c8;
+  --color-fd-primary: #4f46e5;
+  --color-fd-primary-foreground: #ffffff;
+  --color-fd-secondary: #e2e2e3;
+  --color-fd-secondary-foreground: #000000;
+  --color-fd-accent: #eef0ff;
+  --color-fd-accent-foreground: #4f46e5;
+  --color-fd-ring: #000000;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-white font-sans text-on-surface-dark antialiased;
+  }
+
+  ::selection {
+    @apply bg-brand text-on-brand;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

@@ -14,6 +14,7 @@ export default tseslint.config(
       "**/.turbo/**",
       "contracts/**",
       "coverage/**",
+      "apps/docs/.source/**", // fumadocs-mdx codegen output, not our source
     ],
   },
   js.configs.recommended,
@@ -46,15 +47,16 @@ export default tseslint.config(
     rules: { "no-console": "off" },
   },
   {
-    // The site is the one React surface in the repo: enable JSX-aware hooks linting there only.
-    files: ["apps/site/**/*.{ts,tsx}"],
+    // The two Next.js apps are the React surfaces in the repo: enable JSX-aware hooks linting
+    // there only.
+    files: ["apps/site/**/*.{ts,tsx}", "apps/docs/**/*.{ts,tsx}"],
     plugins: { "react-hooks": reactHooks },
     rules: {
       ...reactHooks.configs.recommended.rules,
     },
   },
   {
-    files: ["apps/site/**/*.test.{ts,tsx}"],
+    files: ["apps/site/**/*.test.{ts,tsx}", "apps/docs/**/*.test.{ts,tsx}"],
     rules: {
       "@typescript-eslint/explicit-module-boundary-types": "off",
       "no-console": "off",

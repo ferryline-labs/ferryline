@@ -1,0 +1,60 @@
+---
+title: Introduction
+description: What Ferryline is, what it solves, and how the pieces fit together.
+---
+
+Ferryline is an open-source SDK, relayer, Soroban router, and embeddable widget for moving USDC
+and USDT0 between Stellar and other chains. It's pre-alpha: real, tested, and merged, but not yet
+audited or deployed to mainnet by the project itself.
+
+## Why this exists
+
+Stellar has two official ways to move dollars across chains today: USDT0 over LayerZero, and
+native USDC over Circle's CCTP. Both work on their own, but every team that wants either one
+inside a real product ends up solving the same handful of problems:
+
+- **Decimals.** Stellar uses 7 decimal places for these assets; most other chains use 6. Get this
+  wrong and an amount is off by an order of magnitude.
+- **Trustlines.** A Stellar recipient needs a trustline for USDT0 before it can land, or the
+  transfer fails outright. Nothing upstream checks this for you.
+- **Inbound delivery.** CCTP has no automatic delivery on Stellar — something has to watch for the
+  attestation and submit the mint. Circle's own CCTP guide is explicit about this: an API consumer
+  must query the attestation and submit it onchain to the destination domain itself.
+
+Ferryline solves each of these once, in the open, so integrators don't have to solve them again.
+Every non-obvious behavior it encodes was found by actually attempting the transfer against a real
+network first — see [Security & Verification](/docs/security) for the findings that shaped it.
+
+## The pieces
+
+| Package             | What it is                                                                                   | Where              |
+| ------------------- | -------------------------------------------------------------------------------------------- | ------------------ |
+| `@ferryline/sdk`    | The library you actually import: quote, build, sign, track.                                  | `packages/sdk`     |
+| `@ferryline/core`   | Shared types, decimal/address utilities, the `RailAdapter` contract.                         | `packages/core`    |
+| `ferryline-relayer` | Self-hosted service that completes **inbound** (EVM → Stellar) CCTP transfers.               | `packages/relayer` |
+| `ferryline-router`  | The Soroban contract other contracts call to send USDC/USDT0 cross-chain in one call.        | `contracts/router` |
+| `@ferryline/widget` | A framework-agnostic `<ferryline-widget>` custom element for embedding a bridge UI directly. | `packages/widget`  |
+
+None of these are required together. Most integrators only need `@ferryline/sdk` directly, or the
+widget if they want a ready-made UI; the relayer and router matter most if you're self-hosting
+infrastructure or building on top of the on-chain contract yourself.
+
+## The lifecycle, in one paragraph
+
+Every rail (CCTP for USDC, LayerZero/OFT for USDT0) implements the same four-step shape:
+[`quote()`](/docs/sdk-reference#quote) figures out what a transfer will actually cost and whether
+it's even possible; [`build()`](/docs/sdk-reference#build) turns an accepted quote into unsigned
+transaction steps; your own wallet signs each step (the SDK never holds a key); and
+[`track()`](/docs/sdk-reference#track) follows the transfer from submission through delivery. The
+[end-to-end walkthrough](/docs/bridge-walkthrough) runs this full sequence against a real testnet
+transfer, with real transaction hashes.
+
+## A note on what's genuinely verified
+
+Ferryline's own tests are real and current as of this writing: 60 in `@ferryline/core`, 83 in
+`@ferryline/sdk`, 116 in the relayer (98 unit + 18 Postgres integration), 34 in the widget, and 29
+in the Soroban router — 322 in total, run against real testnet transactions where the claim is
+about on-chain behavior, not just mocked. That doesn't mean everything works: the USDT0/LayerZero
+rail has no Stellar testnet deployment at all (it's mainnet-only), and a few specific behaviors are
+explicitly flagged as unverified throughout this documentation rather than glossed over. Where a
+page says something is unverified, take that literally — it means exactly that, not "unlikely."
