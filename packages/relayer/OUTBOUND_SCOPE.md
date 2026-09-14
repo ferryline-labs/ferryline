@@ -1,9 +1,18 @@
 # Ferryline outbound CCTP relayer (Stellar → EVM) — v1 scope
 
-**Design-only. No implementation exists yet.** What v1 would do and, explicitly, would not do,
-written for the same reason the router's own `SCOPE.md` states it: so nobody has to guess at
-intent from what is merely absent. See `OUTBOUND_THREAT_MODEL.md` (this same directory) for the
-safety reasoning behind several of these.
+**STATUS UPDATE: v1 is implemented, tested, and testnet-proven with a real Sepolia transaction.**
+This document is kept as the real, approved design this build followed — not rewritten after the
+fact — so its "would do"/"would not do" wording below is preserved as written at design time. Where
+a design decision below was left as an open question, `OUTBOUND_THREAT_MODEL.md`'s own "Open
+questions" section now records which option was actually chosen and implemented. SDK/widget wiring
+(automatic registration, `packages/sdk/src/index.ts`'s `Ferryline.registerOutboundTransfer`) was
+also built, in a later phase than this scope doc's own "no changes to packages/sdk or
+packages/widget" framing below anticipated — see `OUTBOUND_THREAT_MODEL.md`'s own note on that
+question for why.
+
+What v1 does and, explicitly, does not do, written for the same reason the router's own `SCOPE.md`
+states it: so nobody has to guess at intent from what is merely absent. See
+`OUTBOUND_THREAT_MODEL.md` (this same directory) for the safety reasoning behind several of these.
 
 This is new, standalone infrastructure for the direction Circle's own CCTP protocol does not
 automatically complete: a Stellar-source burn's completing `receiveMessage` call on the
@@ -17,12 +26,12 @@ completed (`packages/widget/e2e/submit-receive-message.mjs`, `packages/core/veri
 table for this project's original, pre-this-design-pass framing of the gap.
 
 The existing `packages/relayer` (inbound, EVM → Stellar) is the direct structural precedent for
-everything below, cited by file throughout. This is NOT a proposal to modify that package's own
-service logic — v1, if built, is new modules inside the same `packages/relayer` codebase (or a
-new package, an open question — see `OUTBOUND_THREAT_MODEL.md`'s open questions), reusing its
-existing patterns (a Postgres-backed transfer state machine, an append-only spend ledger, a
-`Signer` abstraction, startup crash reconciliation), not new logic bolted onto the inbound work
-loop or its own database rows.
+everything below, cited by file throughout. This was NOT a modification of that package's own
+inbound service logic — v1 shipped as new modules inside the same `packages/relayer` codebase
+(Option A of the two considered in `OUTBOUND_THREAT_MODEL.md`'s open questions, confirmed chosen),
+reusing its existing patterns (a Postgres-backed transfer state machine, an append-only spend
+ledger, a `Signer` abstraction, startup crash reconciliation), not new logic bolted onto the
+inbound work loop or its own database rows.
 
 ## v1 does
 
@@ -73,12 +82,13 @@ expansion was considered. Building v1 to already support N chains "for free" is 
 rejected: gas-market behavior, nonce-check RPC endpoints, and hot-wallet funding are all
 per-chain, real operational surface that should be proven once before being multiplied.
 
-### Automatic delivery for transfers already in flight before v1 exists
+### Automatic delivery for transfers already in flight before v1 existed
 
-v1, if built, would only ever act on transfers registered with it after it exists. It does not
-retroactively scan Stellar's ledger history for past, still-undelivered burns. An operator (or the
-SDK/widget) choosing to backfill historical undelivered transfers into the new relayer is a
-separate, explicit operational decision, not something v1's own design assumes.
+v1 only ever acts on transfers registered with it after it started running. It does not
+retroactively scan Stellar's ledger history for past, still-undelivered burns from before it
+existed. An operator (or the SDK/widget) choosing to backfill historical undelivered transfers into
+the relayer is a separate, explicit operational decision, not something v1's own design assumed or
+automated.
 
 ### Gas-price prediction, bidding, or MEV protection
 
@@ -102,6 +112,15 @@ recourse that exists today with no relayer at all: anyone can complete it manual
 `packages/widget/e2e/submit-receive-message.mjs` already demonstrates.
 
 ### Any change to the router contract, the SDK's rail adapters, or the widget's own UI
+
+**UPDATE: the SDK/widget wiring described as out of scope below DID happen, in a genuinely
+separate, later phase** — `packages/sdk/src/index.ts`'s `Ferryline.registerOutboundTransfer`
+(open question 2's Option A, automatic registration, confirmed chosen — see
+`OUTBOUND_THREAT_MODEL.md`'s own open-questions section) and the widget's matching
+`OUTBOUND_CCTP_DELIVERY_CAVEAT` revision, exactly as anticipated below. The original claim was
+scoped correctly for its own moment: v1 ITSELF (this relayer service) needed no router/SDK/widget
+change to build — that remained true. What follows is the original text, unedited, for the
+record:
 
 v1 is a new, standalone service consuming already-existing, already-real interfaces: Circle's
 Iris attestation API (already integrated, `packages/sdk/src/rails/usdc-cctp/iris.ts`) and the

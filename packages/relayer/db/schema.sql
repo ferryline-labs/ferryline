@@ -230,3 +230,154 @@ CREATE TABLE IF NOT EXISTS registration_attempts (
 
 CREATE INDEX IF NOT EXISTS registration_attempts_key_hash_idx
   ON registration_attempts (key_hash, attempted_at);
+
+-- =============================================================================
+-- OUTBOUND (Stellar -> EVM) tables, added per OUTBOUND_THREAT_MODEL.md/
+-- OUTBOUND_SCOPE.md (packages/relayer/, design STEP 1-2; this is implementation
+-- STEP 1). Mirrors the inbound tables above deliberately — same state-machine
+-- shape, same append-only spend-ledger discipline, same atomic-reservation
+-- pattern for the daily ceiling — reusing `transfer_status` rather than a new
+-- enum (Postgres has no CREATE TYPE ... IF NOT EXISTS; src/db/pool.ts's
+-- migrate() already has a real, working idempotency workaround for exactly
+-- ONE enum, and outbound's real state machine needs the identical five values,
+-- so reusing it avoids duplicating that workaround for no semantic gain).
+-- =============================================================================
+
+-- ---------------------------------------------------------------------------
+-- outbound_transfers: one row per registered Stellar-source CCTP burn being
+-- relayed to its destination EVM chain, and the state machine that drives it.
+-- Deliberately a SEPARATE table from `transfers`, not a shared table with a
+-- direction column: the two directions' rows are written by disjoint code
+-- (src/work/ vs. the new outbound work-loop modules) and read by disjoint
+-- HTTP routes, so a shared table would need every query to filter by
+-- direction to avoid ever mixing the two — a real footgun a separate table
+-- avoids by construction, at the cost of some column duplication.
+--
+-- Status transitions (identical shape to `transfers` above; see
+-- src/repo/types.ts's ALLOWED_TRANSITIONS, mirrored for outbound):
+--   pending -> attested -> submitting -> delivered
+--   (any of pending/attested/submitting) -> failed   [terminal, only for the
+--     explicit terminal errors enumerated for outbound — never a catch-all]
+--
+-- Direction mapping, stated explicitly since the column names are inherited
+-- from the inbound shape but now mean the mirror-image thing:
+--   source_chain/source_tx_hash/source_domain  = the STELLAR deposit_for_burn
+--     (source_chain is always 'stellar' for v1; source_domain is Stellar's own
+--     CCTP domain id, matching the inbound table's source_domain being the
+--     EVM source chain's domain id — same column, opposite chain).
+--   destination_chain/destination_tx_hash       = the destination EVM chain's
+--     receiveMessage completion (destination_chain is always the one v1
+--     destination chain — see OUTBOUND_SCOPE.md's single-chain-for-v1 scope;
+--     kept as a real column, not a hardcoded constant, so a future multi-chain
+--     version does not need a schema change to add a second value here).
+--
+-- `version`/optimistic-concurrency and `updated_at` follow the exact same
+-- discipline as `transfers` — see that table's own comment above.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS outbound_transfers (
+  id                   TEXT PRIMARY KEY,             -- ULID, from @ferryline/core newTransferId()
+  rail                 TEXT NOT NULL,                 -- currently always 'usdc-cctp'
+  status               transfer_status NOT NULL DEFAULT 'pending',
+
+  source_chain         TEXT NOT NULL DEFAULT 'stellar',
+  source_tx_hash       TEXT NOT NULL,                 -- the real Stellar deposit_for_burn tx hash
+  source_domain        INTEGER NOT NULL,               -- Stellar's own CCTP domain id
+
+  destination_chain    TEXT NOT NULL,                  -- v1: always the one configured EVM chain
+  destination_tx_hash  TEXT,                           -- the real receiveMessage tx hash, once submitted
+
+  -- NULL until status = 'attested'. Extracted from the real, attested Iris message body — never
+  -- accepted from the registration caller, same "verified on-chain truth, not a caller's claim"
+  -- reasoning as the inbound table's own amount/recipient columns (see work/attest.ts's outbound
+  -- counterpart).
+  amount               NUMERIC(38, 0),                 -- 6-decimal USDC units (Circle's CCTP message unit)
+  recipient            TEXT,                           -- the destination EVM address (mintRecipient), 0x-prefixed hex
+
+  iris_nonce            TEXT,                          -- 0x-prefixed 32-byte hex, Iris eventNonce
+  iris_message          TEXT,                          -- 0x-prefixed hex, Iris `message`
+  iris_attestation      TEXT,                          -- 0x-prefixed hex, Iris `attestation`
+
+  error_code           TEXT,                          -- set only when status = 'failed'
+  error_detail          TEXT,
+
+  version               BIGINT NOT NULL DEFAULT 1,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS outbound_transfers_status_idx ON outbound_transfers (status);
+CREATE INDEX IF NOT EXISTS outbound_transfers_recipient_idx ON outbound_transfers (recipient, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS outbound_transfers_source_tx_idx ON outbound_transfers (source_chain, source_tx_hash);
+
+-- ---------------------------------------------------------------------------
+-- outbound_spend_attempts: the outbound mirror of spend_attempts above, same
+-- append-only reservation-intent-log discipline, denominated in the
+-- destination EVM chain's own native gas units (wei, for any current EVM CCTP
+-- destination) instead of XLM stroops. See spend_attempts's own comment for
+-- the full reasoning (identical here) — not repeated verbatim a second time.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS outbound_spend_attempts (
+  id                 BIGSERIAL PRIMARY KEY,
+  transfer_id        TEXT NOT NULL,
+  amount_wei         NUMERIC(78, 0) NOT NULL,   -- the gas-cost quote, in wei (uint256-sized: 78 digits covers it)
+  destination        TEXT NOT NULL,             -- recipient this spend is for (the destination EVM address)
+  destination_chain  TEXT NOT NULL,             -- which EVM chain this attempt was for
+  sponsor_account    TEXT NOT NULL,             -- the relayer's own EVM hot-wallet address
+  attempted_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS outbound_spend_attempts_transfer_idx ON outbound_spend_attempts (transfer_id);
+CREATE INDEX IF NOT EXISTS outbound_spend_attempts_attempted_at_idx ON outbound_spend_attempts (attempted_at);
+
+-- ---------------------------------------------------------------------------
+-- outbound_spend_ledger_events: the outbound mirror of spend_ledger_events
+-- above — identical 'reserved' | 'released' | 'broadcast' event typing and
+-- release_reason enum, denominated in wei. See that table's own comment for
+-- the full reasoning and the net-spend reconstruction formula (identical
+-- here, substituting amount_wei for amount_stroops).
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS outbound_spend_ledger_events (
+  id              BIGSERIAL PRIMARY KEY,
+  transfer_id     TEXT NOT NULL,
+  event_type      TEXT NOT NULL,   -- 'reserved' | 'released' | 'broadcast'
+  release_reason  TEXT,            -- 'concurrent_race_lost' | 'broadcast_rejected' | NULL
+  amount_wei      NUMERIC(78, 0) NOT NULL,
+  occurred_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS outbound_spend_ledger_events_transfer_idx ON outbound_spend_ledger_events (transfer_id);
+CREATE INDEX IF NOT EXISTS outbound_spend_ledger_events_occurred_at_idx ON outbound_spend_ledger_events (occurred_at);
+
+-- ---------------------------------------------------------------------------
+-- outbound_daily_spend: the global gas-spend ceiling's ledger for the outbound
+-- direction. Keyed by (spend_date, destination_chain) rather than just
+-- spend_date, per OUTBOUND_THREAT_MODEL.md's own "forward-looking key shape,
+-- not forward-looking behavior" note: v1 only ever has ONE destination_chain
+-- value, so this behaves identically to daily_spend's single-key table for
+-- v1, but does not need a schema change on the day a second destination chain
+-- is added (a real, deliberate difference from daily_spend's own shape, not
+-- an oversight — do not "simplify" this back to a single-column key).
+--
+-- Same atomic reserve-then-commit statement shape as daily_spend (see that
+-- table's own comment for the full concurrency reasoning, identical here):
+--
+--   INSERT INTO outbound_daily_spend (spend_date, destination_chain, spent_wei)
+--   VALUES ($1, $2, $3)
+--   ON CONFLICT (spend_date, destination_chain) DO UPDATE
+--     SET spent_wei = outbound_daily_spend.spent_wei + EXCLUDED.spent_wei
+--     WHERE outbound_daily_spend.spent_wei + EXCLUDED.spent_wei <= $4
+--   RETURNING spent_wei;
+--
+-- Same release semantics: a reservation whose broadcast never reached the
+-- network is released with a compensating decrement, bounded at zero.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS outbound_daily_spend (
+  spend_date          DATE NOT NULL,
+  destination_chain    TEXT NOT NULL,
+  spent_wei            NUMERIC(78, 0) NOT NULL DEFAULT 0,
+  PRIMARY KEY (spend_date, destination_chain)
+);

@@ -7,13 +7,24 @@ import {
 } from "@fastify/type-provider-zod";
 import Fastify, { type FastifyInstance } from "fastify";
 
+import type { OutboundTransferRepository } from "../repo/outbound-types.js";
 import type { TransferRepository } from "../repo/types.js";
 import type { SpendCeiling } from "../spend/ceiling.js";
 import type { RegistrationLimiter } from "../spend/registration-limit.js";
 import type { ApiKeyStore } from "./auth.js";
+import { getOutboundTransferRoute } from "./routes/get-outbound-transfer.js";
 import { getTransferRoute } from "./routes/get-transfer.js";
-import { healthzRoute } from "./routes/healthz.js";
+import { healthzRoute, type HealthzOutboundOptions } from "./routes/healthz.js";
+import { registerOutboundTransferRoute } from "./routes/register-outbound-transfer.js";
 import { registerTransferRoute } from "./routes/register-transfer.js";
+
+/** Only present once the outbound direction is wired up (see main.ts) — omit entirely to run this
+ *  process inbound-only, same optionality as HealthzOutboundOptions itself. */
+export interface BuildAppOutboundOptions {
+  readonly repo: OutboundTransferRepository;
+  readonly registrationLimiter: RegistrationLimiter;
+  readonly healthz: HealthzOutboundOptions;
+}
 
 export interface BuildAppOptions {
   readonly repo: TransferRepository;
@@ -29,6 +40,7 @@ export interface BuildAppOptions {
   readonly startedAt?: number;
   readonly now?: () => number;
   readonly logger?: boolean;
+  readonly outbound?: BuildAppOutboundOptions;
 }
 
 /**
@@ -70,6 +82,7 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
     version: options.version,
     startedAt,
     ...(options.now ? { now: options.now } : {}),
+    ...(options.outbound ? { outbound: options.outbound.healthz } : {}),
   });
   void app.register(registerTransferRoute, {
     repo: options.repo,
@@ -78,6 +91,17 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
     registrationLimiter: options.registrationLimiter,
   });
   void app.register(getTransferRoute, { repo: options.repo });
+
+  if (options.outbound) {
+    const outbound = options.outbound;
+    void app.register(registerOutboundTransferRoute, {
+      repo: outbound.repo,
+      apiKeys: options.apiKeys,
+      network: options.network,
+      registrationLimiter: outbound.registrationLimiter,
+    });
+    void app.register(getOutboundTransferRoute, { repo: outbound.repo });
+  }
 
   return app;
 }
