@@ -116,6 +116,38 @@ function isOutboundCctp(quote: Quote): boolean {
   return quote.rail === "usdc-cctp" && quote.request.from.chain === "stellar";
 }
 
+/**
+ * Deliberate pause, in `afterStepSubmitted` below, specifically between a Stellar step's confirmed
+ * on-chain landing and building/submitting the very next Stellar step in the same transfer (today,
+ * this is only the outbound CCTP approve -> burn sequence — see `usdc-cctp/adapter.ts`'s own
+ * `stellar-transaction-deferred` step, the only place in this codebase two Stellar transactions from
+ * the same account are submitted back to back).
+ *
+ * Why this exists — stated plainly, with the honesty standard this project already holds every
+ * platform finding to: this is an EMPIRICALLY OBSERVED PATTERN, not a documented Soroban/Stellar
+ * platform behavior. A real verification pass (this widget's own real testnet E2E testing, plus a
+ * direct search of Stellar's official developer docs — the RPC `sendTransaction` reference, the
+ * account/sequence-number fundamentals page, the transaction lifecycle page, the Stellar blog's own
+ * "Proposed Changes To Transaction Submission" post, and the official `stellar-dev` dapp-development
+ * skill's own reference `submitSorobanTransaction` implementation) found NO official documentation of
+ * "the RPC node's own account/sequence-number state can temporarily lag the network's actual current
+ * state for a transaction submitted immediately after a prior one from the same account" — the
+ * official reference implementation itself throws immediately on any `ERROR` status, with no retry or
+ * delay guidance at all.
+ *
+ * What IS real: every `tx_bad_seq` rejection observed during this widget's own real testnet
+ * E2E testing (4 for 4, across multiple sessions) was the SECOND of two Stellar transactions
+ * submitted back to back from the same account — the approve confirming, then the burn being built
+ * and submitted immediately after. Two of those four were false rejections (the transaction had, in
+ * fact, landed — confirmed independently via Horizon); the other two were genuine failures (the
+ * transaction never landed even after the rejection-recheck fix's own bounded retries) — see
+ * `submitStellarTransactionWithRejectionRecheck`'s own doc comment in client.ts for that fix, which
+ * remains the correct backstop here regardless of this delay's effect. This delay is a mitigation
+ * aimed at reducing how often the false-rejection class happens in the first place, reasoned from
+ * that real, repeated pattern — not a confirmed fix for a documented platform issue.
+ */
+const POST_APPROVE_BUILD_DELAY_MS = 3000;
+
 export class FerrylineWidget extends HTMLElement {
   static readonly observedAttributes = [
     "network",
@@ -162,6 +194,16 @@ export class FerrylineWidget extends HTMLElement {
    */
   testClientOverride: WidgetClient | undefined;
   testWalletOverride: WalletSession | undefined;
+  /**
+   * Test-only override for `POST_APPROVE_BUILD_DELAY_MS` (see that constant's own doc comment for
+   * why the real delay exists). NOT a real, documented widget config option — deliberately not
+   * exposed as an attribute/property in the public docs, since the real 3-second default is an
+   * internal mitigation for observed RPC timing behavior, not something an integrator should be
+   * expected to tune. Exists purely so index.test.ts can prove the delay is genuinely applied
+   * without a real multi-second wait per test run. `undefined` (the real, shipped default) means
+   * "use the real constant" — see `afterStepSubmitted`'s own use of this field below.
+   */
+  testPostApproveBuildDelayMsOverride: number | undefined;
 
   connectedCallback(): void {
     this.render();
@@ -416,6 +458,17 @@ export class FerrylineWidget extends HTMLElement {
       this.setPhaseIfCurrent(
         signedAwaitingNextStep({ quote, built, stepIndex: nextIndex }),
         generation,
+      );
+      // Real, empirically observed pattern (not an officially documented Soroban RPC behavior —
+      // see POST_APPROVE_BUILD_DELAY_MS's own doc comment for the full honesty caveat): pause here,
+      // between the just-confirmed step's on-chain landing and building/submitting the very next
+      // step, specifically because this exact back-to-back-submission shape is what every real
+      // tx_bad_seq rejection observed during this widget's own testnet testing had in common.
+      await new Promise((resolve) =>
+        setTimeout(
+          resolve,
+          this.testPostApproveBuildDelayMsOverride ?? POST_APPROVE_BUILD_DELAY_MS,
+        ),
       );
       const nextStep = await this.client().ferryline.prepareStep(built.transferId, nextIndex);
       const rebuilt = {

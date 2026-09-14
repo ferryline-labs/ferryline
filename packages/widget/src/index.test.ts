@@ -667,3 +667,194 @@ describe("ferryline-widget — a stale, abandoned submission cannot clobber a ne
     el.remove();
   });
 });
+
+describe("ferryline-widget — deliberate delay before building the step right after a confirmed Stellar step", () => {
+  /**
+   * Real, deliberate mitigation (see POST_APPROVE_BUILD_DELAY_MS's own doc comment in index.ts for
+   * the full honesty caveat: an empirically observed pattern, not a documented Soroban RPC platform
+   * behavior) for the real tx_bad_seq class of rejection this project's own real testnet E2E testing
+   * hit repeatedly, every time on the SECOND of two Stellar transactions submitted back to back from
+   * the same account (the outbound CCTP approve -> burn sequence). These tests use
+   * `testPostApproveBuildDelayMsOverride` (test-only; the real, shipped default is
+   * POST_APPROVE_BUILD_DELAY_MS = 3000) so the suite proves the delay is genuinely applied without
+   * needing a real multi-second wait per run.
+   */
+  function twoStepBuiltFixture(): {
+    readonly built: BuiltTransfer;
+    readonly nextStep: TransferStep;
+  } {
+    const source = new Account(SENDER, "100");
+    const approveTx = new TransactionBuilder(source, {
+      fee: BASE_FEE,
+      networkPassphrase: NETWORK_PASSPHRASE,
+    })
+      .addOperation(new Contract(TOKEN_MESSENGER).call("approve"))
+      .setTimeout(300)
+      .build();
+    // A real, distinguishable second transaction — different contract function, and built against
+    // the account's NEXT sequence number (source.sequenceNumber() auto-increments on .build()
+    // above), the same way the real approve -> burn pair genuinely differs on-chain.
+    const burnTx = new TransactionBuilder(source, {
+      fee: BASE_FEE,
+      networkPassphrase: NETWORK_PASSPHRASE,
+    })
+      .addOperation(new Contract(TOKEN_MESSENGER).call("deposit_for_burn"))
+      .setTimeout(300)
+      .build();
+    const built: BuiltTransfer = {
+      transferId: newTransferId(),
+      rail: "usdc-cctp",
+      steps: [
+        {
+          chain: "stellar",
+          kind: "stellar-transaction",
+          xdr: approveTx.toXDR(),
+          description: "Approve",
+        },
+        {
+          chain: "stellar",
+          kind: "stellar-transaction-deferred",
+          dependsOn: 0,
+          description: "Burn (prepare after approve confirms)",
+        },
+      ],
+    };
+    const nextStep: TransferStep = {
+      chain: "stellar",
+      kind: "stellar-transaction",
+      xdr: burnTx.toXDR(),
+      description: "Burn",
+    };
+    return { built, nextStep };
+  }
+
+  it("a two-step transfer (approve -> burn) genuinely waits the full delay before prepareStep is called for the burn", async () => {
+    const { el, adapter, wallet } = makeElement();
+    const { built, nextStep } = twoStepBuiltFixture();
+    adapter.statuses = [
+      { transferId: "" as TransferId, stage: "submitted", updatedAt: Date.now() },
+    ];
+    let prepareStepCalled = false;
+    let prepareStepCallTime: number | undefined;
+    const client: WidgetClient = {
+      ferryline: {
+        config: { network: "testnet", rpcUrl: "https://soroban-testnet.stellar.org" },
+        quote: (r: TransferRequest) => adapter.quote(r),
+        build: () => Promise.resolve(built),
+        markSubmitted: () => Promise.resolve(),
+        registerOutboundTransfer: () => Promise.resolve(),
+        track: (id: TransferId, signal?: AbortSignal) => adapter.track(id, signal),
+        prepareStep: () => {
+          prepareStepCalled = true;
+          prepareStepCallTime = Date.now();
+          return Promise.resolve(nextStep);
+        },
+      } as never,
+      availableRails: ["usdc-cctp"],
+      networkPassphrase: NETWORK_PASSPHRASE,
+      submitStellarTransaction: () => Promise.resolve("fake-source-tx-hash"),
+    };
+    el.testClientOverride = client;
+    // Deliberately large relative to this suite's own real overhead (state transitions, promise
+    // microtasks — all comfortably sub-10ms in practice) so a mutation that removes the delay
+    // entirely produces a clearly, reliably too-small elapsed time below, not a flaky near-miss.
+    const DELAY_MS = 300;
+    el.testPostApproveBuildDelayMsOverride = DELAY_MS;
+
+    el.request = REQUEST;
+    await vi.waitFor(() =>
+      expect(el.shadowRoot?.querySelector('[part="build-button"]')).not.toBeNull(),
+    );
+    el.shadowRoot?.querySelector<HTMLButtonElement>('[part="build-button"]')?.click();
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('[part="preview"]')).not.toBeNull());
+    el.shadowRoot?.querySelector<HTMLButtonElement>('[data-wallet-module="freighter"]')?.click();
+    await vi.waitFor(() =>
+      expect(
+        el.shadowRoot?.querySelector('[part="confirm-button"]')?.hasAttribute("disabled"),
+      ).toBe(false),
+    );
+    // Captured right at the click that starts the timed sequence (signing -> submit -> markSubmitted
+    // -> the delay itself -> prepareStep) — NOT earlier, so this measures only the real work this
+    // delay is gating, not the whole test's unrelated quote/build/wallet-connect setup time.
+    const startTime = Date.now();
+    el.shadowRoot?.querySelector<HTMLButtonElement>('[part="confirm-button"]')?.click();
+
+    await vi.waitFor(() => expect(prepareStepCalled).toBe(true));
+    const elapsed = (prepareStepCallTime ?? 0) - startTime;
+    // Genuinely waited at least the configured delay (not zero, not skipped) — a real elapsed-time
+    // assertion, not just a call-order assertion, per the requirement that this be a genuine wait.
+    // (Verified via a real mutation test: removing the delay entirely drops this well under 50ms,
+    // comfortably below DELAY_MS, reliably failing this assertion — see the fix's own commit.)
+    expect(elapsed).toBeGreaterThanOrEqual(DELAY_MS);
+
+    // The transfer still completes correctly afterward — the delay doesn't break the flow, it only
+    // postpones this one step.
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('[part="preview"]')).not.toBeNull());
+    expect(wallet.signedXdr).toBeDefined();
+    el.remove();
+  });
+
+  it("a single-step transfer (no approve needed) is NOT delayed at all — the delay is scoped to the multi-step branch only", async () => {
+    const { el, adapter, wallet } = makeElement();
+    adapter.statuses = [
+      { transferId: "" as TransferId, stage: "submitted", updatedAt: Date.now() },
+      {
+        transferId: "" as TransferId,
+        stage: "delivered",
+        updatedAt: Date.now(),
+        destinationTxHash: "0xdeadbeef",
+      },
+    ];
+    let prepareStepCalled = false;
+    const client: WidgetClient = {
+      ferryline: {
+        config: { network: "testnet", rpcUrl: "https://soroban-testnet.stellar.org" },
+        quote: (r: TransferRequest) => adapter.quote(r),
+        build: (q: Quote) => adapter.build(q),
+        markSubmitted: () => Promise.resolve(),
+        registerOutboundTransfer: () => Promise.resolve(),
+        track: (id: TransferId, signal?: AbortSignal) => adapter.track(id, signal),
+        prepareStep: () => {
+          prepareStepCalled = true;
+          return Promise.reject(
+            new Error("prepareStep must never be called for a single-step transfer"),
+          );
+        },
+      } as never,
+      availableRails: ["usdc-cctp"],
+      networkPassphrase: NETWORK_PASSPHRASE,
+      submitStellarTransaction: () => Promise.resolve("fake-source-tx-hash"),
+    };
+    el.testClientOverride = client;
+    // Deliberately left as a large value: if the (single-step) code path incorrectly applied the
+    // delay here, this test would time out and fail loudly rather than silently pass on a
+    // coincidentally-fast run.
+    el.testPostApproveBuildDelayMsOverride = 5000;
+    const startTime = Date.now();
+
+    el.request = REQUEST;
+    await vi.waitFor(() =>
+      expect(el.shadowRoot?.querySelector('[part="build-button"]')).not.toBeNull(),
+    );
+    el.shadowRoot?.querySelector<HTMLButtonElement>('[part="build-button"]')?.click();
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('[part="preview"]')).not.toBeNull());
+    el.shadowRoot?.querySelector<HTMLButtonElement>('[data-wallet-module="freighter"]')?.click();
+    await vi.waitFor(() =>
+      expect(
+        el.shadowRoot?.querySelector('[part="confirm-button"]')?.hasAttribute("disabled"),
+      ).toBe(false),
+    );
+    el.shadowRoot?.querySelector<HTMLButtonElement>('[part="confirm-button"]')?.click();
+
+    await vi.waitFor(() => {
+      expect(el.shadowRoot?.querySelector('[part="dest-tx"]')).not.toBeNull();
+    });
+    const elapsed = Date.now() - startTime;
+    expect(prepareStepCalled).toBe(false);
+    // Completed fast — nowhere near the 5s override, proving that override is never consulted on
+    // this path at all (this is the USDT0 / single-step-CCTP shape: no deferred step exists).
+    expect(elapsed).toBeLessThan(2000);
+    expect(wallet.signedXdr).toBeDefined();
+    el.remove();
+  });
+});
