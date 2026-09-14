@@ -34,6 +34,95 @@ For the full design reasoning behind the outbound direction specifically, see th
 `OUTBOUND_SCOPE.md` and `OUTBOUND_THREAT_MODEL.md` (`packages/relayer/`) — real, current, detailed
 design docs this page draws from but doesn't fully reproduce.
 
+## The transfer state machine
+
+Both directions share the exact same real status type (`packages/relayer/src/repo/types.ts`):
+`"pending" | "attested" | "submitting" | "delivered" | "failed"`. Every transfer, either
+direction, moves through this:
+
+```mermaid
+stateDiagram-v2
+  [*] --> pending: POST /transfers or /outbound-transfers
+  pending --> attested: real Iris attestation verified
+  pending --> failed: malformed message, or recipient rate-limited
+  attested --> submitting: completing call broadcast<br/>(hash recorded BEFORE confirmation)
+  attested --> failed: unrecoverable build/sign error
+  submitting --> delivered: on-chain confirmation observed
+  delivered --> [*]
+  failed --> [*]
+```
+
+The `submitting` transition happening _before_ confirmation, with the real transaction hash
+already recorded, is deliberate crash-safety (`work/submit.ts`'s and `work/outbound-submit.ts`'s
+own real doc comments both call this out explicitly): if the relayer process dies right after
+broadcasting, the row is never stuck in limbo — a restart's reconciliation pass can resolve it by
+checking whether that specific hash actually landed, rather than re-submitting blind.
+
+## How each direction actually completes
+
+The two directions are structurally different — who burns, who watches, who pays for the
+completing transaction all swap — so they're kept as two separate diagrams rather than forced into
+one that would blur which side does what.
+
+### Inbound (EVM → Stellar)
+
+```mermaid
+sequenceDiagram
+  participant Sender as Sender's EVM wallet
+  participant TMM as TokenMessengerMinter (EVM)
+  participant Caller as Caller (you, or the widget)
+  participant Relayer as ferryline-relayer
+  participant Iris as Circle Iris
+  participant Forwarder as CctpForwarder (Stellar)
+
+  Sender->>TMM: depositForBurnWithHook (real burn)
+  Caller->>Relayer: POST /transfers { sourceTxHash }<br/>no amount, no recipient
+  loop attestOnce / attestUntilDone
+    Relayer->>Iris: messagesByTx(sourceDomain, sourceTxHash)
+  end
+  Iris-->>Relayer: attestation complete<br/>(real amount + recipient extracted here)
+  Note over Relayer: pending → attested
+  Relayer->>Forwarder: mint_and_forward<br/>(fee-bumped, Stellar sponsor pays)
+  Note over Relayer: attested → submitting (hash recorded first)
+  loop waitForDelivery
+    Relayer->>Forwarder: poll is_nonce_used
+  end
+  Forwarder-->>Relayer: nonce consumed
+  Note over Relayer: submitting → delivered
+```
+
+### Outbound (Stellar → EVM)
+
+```mermaid
+sequenceDiagram
+  participant Sender as Sender (SDK / widget)
+  participant Router as Stellar CCTP contracts
+  participant Caller as SDK's registerOutboundTransfer()
+  participant Relayer as ferryline-relayer
+  participant Iris as Circle Iris
+  participant MTV2 as MessageTransmitterV2 (EVM)
+
+  Sender->>Router: deposit_for_burn (real burn, via UsdcCctpAdapter)
+  Note over Caller: only after the transfer's FINAL step confirms
+  Caller->>Relayer: POST /outbound-transfers { sourceTxHash }<br/>no amount, no recipient
+  loop attestOutboundOnce / attestOutboundUntilDone
+    Relayer->>Iris: messagesByTx(sourceDomain, sourceTxHash)
+  end
+  Iris-->>Relayer: attestation complete<br/>(real amount + recipient extracted here)
+  Note over Relayer: pending → attested
+  Relayer->>MTV2: receiveMessage<br/>(gas paid by EVM sponsor)
+  Note over Relayer: attested → submitting (hash recorded first)
+  loop waitForOutboundDelivery
+    Relayer->>MTV2: poll usedNonces
+  end
+  MTV2-->>Relayer: nonce consumed
+  Note over Relayer: submitting → delivered
+```
+
+Both loops are real, current function names (`packages/relayer/src/work/attest.ts`,
+`submit.ts`, `outbound-attest.ts`, `outbound-submit.ts`) — the outbound pair mirrors the inbound
+pair deliberately, down to the crash-safety ordering, not just conceptually.
+
 ## The security property: amount and recipient are never trusted from the caller
 
 `POST /transfers` accepts exactly four fields: `transferId`, `sourceChain`, `sourceTxHash`, and

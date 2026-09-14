@@ -85,6 +85,31 @@ buffer; `BytesN<32>` is Soroban's fixed-size, exactly-32-byte buffer type — th
 contract's recipient field actually expects. `i128` is a 128-bit signed integer, used for token
 amounts so they can't silently overflow.
 
+Both entry points funnel through the same real dispatcher, `dispatch_one_leg` — `send_cross_chain`
+calls it once, `send_cross_chain_batch` calls it once per leg, after authorizing the whole batch up
+front (invariant 1 below):
+
+```mermaid
+flowchart TD
+  A["send_cross_chain(payer, rail, dest, amount)"] --> C["payer.require_auth()"]
+  B["send_cross_chain_batch(payer, legs)"] --> D["payer.require_auth() — once, before the loop"]
+  D --> E["for each leg in legs"]
+  C --> F["dispatch_one_leg"]
+  E --> F
+  F --> G{"rail == Rail::Usdc?"}
+  G -->|"yes"| H["TokenMessengerMinter.deposit_for_burn"]
+  G -->|"no — Rail::Usdt0"| I["OFT.quote_send, then OFT.send"]
+  H --> J["Volume counter += amount"]
+  I --> J
+  J --> K["publish TransferSent event"]
+```
+
+`dispatch_one_leg` itself checks that `rail` actually matches the `Dest` variant before doing
+anything else (`panic!` if not — see the stale-comment note above), then dispatches to exactly one
+of the two real rail contracts. Both arms update the same `Volume` counter and publish the same
+`TransferSent` event afterward (invariant 6 below) — the two rails are structurally parallel paths
+through one function, not two different code paths that happen to look similar.
+
 ### `Rail` and `Dest`
 
 `Rail` just names which already-deployed rail contract a call should go to:

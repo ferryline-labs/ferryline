@@ -3,6 +3,32 @@ title: Core Concepts
 description: The two rails, the transfer lifecycle, and the three problems this project actually solves.
 ---
 
+## How the pieces fit together
+
+Four real pieces, not a pipeline where every request flows through all of them — grounded in
+`ARCHITECTURE.md`'s own real system-overview diagram, simplified here to just the relationships
+between the four named in the [Introduction](/docs):
+
+```mermaid
+flowchart LR
+  Widget["@ferryline/widget<br/>&lt;ferryline-widget&gt;"] -->|"uses"| SDK["@ferryline/sdk<br/>Ferryline class"]
+  SDK -->|"quote / build / track"| Rails["CCTP + USDT0 OFT<br/>rail contracts"]
+  SDK -.->|"registerOutboundTransfer()<br/>(opt-in)"| Relayer["ferryline-relayer<br/>self-hosted"]
+  Widget -.->|"registerInboundTransfer()"| Relayer
+  Relayer -->|"watches attestation,<br/>submits the completing call"| Rails
+  OtherContract["Another Soroban contract<br/>(a vault, payroll, escrow — not Ferryline's)"] -->|"send_cross_chain(_batch)"| Router["ferryline-router"]
+  Router -->|"dispatches to"| Rails
+```
+
+Two things worth being precise about, since it's easy to assume a pipeline that isn't real: the
+**SDK never calls the router** — it talks to the CCTP/OFT rail contracts directly for its own
+quote/build/track flow, the same contracts the router also dispatches to. The router exists for a
+_different_ caller entirely: another Soroban contract (a vault, a payroll contract, anything with
+its own `require_auth` logic) that wants a one-call cross-chain send without integrating CCTP/OFT
+itself. And the relayer isn't in either of those call paths at all until you opt in — it only ever
+watches an already-broadcast burn's attestation and submits the one completing transaction, for
+whichever direction(s) you've registered with it.
+
 ## The two rails
 
 Ferryline ships exactly two rail adapters today, both implementing the same `RailAdapter`

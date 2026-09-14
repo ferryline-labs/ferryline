@@ -23,6 +23,24 @@ real — pulled directly from this project's own dated experiment reports
 
 ## Part 1 — Outbound: Stellar → Ethereum Sepolia
 
+The real step sequence this part walks through, matching the code below exactly:
+
+```mermaid
+flowchart TD
+  A["quote()"] --> B["build()"]
+  B --> C{"steps.length"}
+  C -->|"2 — needs approve"| D["sign + submit approve"]
+  D --> E["prepareStep(id, 1)"]
+  E --> F["sign + submit burn"]
+  C -->|"1 — allowance already covers it"| F
+  F --> G["markSubmitted(id, burnTxHash)"]
+  G --> H{"relayer-url configured?"}
+  H -->|"yes"| I["registerOutboundTransfer(id)<br/>on the final step only"]
+  H -->|"no"| J["track() — verified, then stuck"]
+  I --> K["track() — verified, then delivered<br/>(relayer submits receiveMessage)"]
+  J --> L["manual receiveMessage<br/>(anyone, permissionless)"]
+```
+
 ### Set up the client
 
 ```ts
@@ -223,7 +241,18 @@ rose from 19.0 to 19.5 USDC immediately after.
 
 This direction has had automatic delivery from the start, via the self-hosted relayer (see
 [the Relayer docs](/docs/relayer) for running your own). The SDK builds the burn; the relayer
-watches for it and completes the mint.
+watches for it and completes the mint. The real step sequence, matching the code below exactly:
+
+```mermaid
+flowchart TD
+  A["encodeDepositForBurnWithHookToStellar()"] --> B["sendTransaction — real burn on Sepolia"]
+  B --> C["POST /transfers { sourceTxHash }<br/>no amount, no recipient"]
+  C --> D["poll GET /transfers/:id"]
+  D --> E{"status"}
+  E -->|"pending"| D
+  E -->|"attested"| D
+  E -->|"delivered"| F["done — real mint_and_forward<br/>landed on Stellar"]
+```
 
 ### Burn on the EVM side
 
