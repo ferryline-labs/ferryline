@@ -508,3 +508,311 @@ describe("ferryline-widget — outbound CCTP delivery caveat (STEP 3 finding)", 
     el.remove();
   });
 });
+
+describe("ferryline-widget — registerOutboundTransfer fires exactly once, on the real final step", () => {
+  // REQUIRED test (per the outbound-auto-registration phase's own sign-off): reproduces the real,
+  // shipped-and-fixed double-registration bug this widget already hit once. markSubmitted fires
+  // once per signed step; registerOutboundTransfer used to be called from inside markSubmitted
+  // itself, which meant a two-step outbound transfer (approve, then burn) registered TWICE — once
+  // with the wrong (approve) tx hash, rejected by the relayer's own transferId-primary-key when
+  // the correct (burn) registration arrived second. The fix moved the trigger to
+  // afterStepSubmitted's own "no next step" branch (index.ts, isFinalStep(built, stepIndex) ===
+  // true there by construction). This suite drives a REAL two-step transfer through the widget's
+  // own real DOM-driven confirm flow (not a direct method call) — real signed XDR per step, real
+  // click-driven state transitions between steps — and proves registration fires exactly once,
+  // carrying the real burn hash, never the approve hash. Also covers the one-step (standing
+  // allowance) case, so the fix doesn't accidentally suppress registration for the simpler,
+  // far more common path.
+
+  /** A two-step-capable fake RailAdapter: steps = [approve, burn] or steps = [burn], toggled by
+   *  needsApprove — the same real shape usdc-cctp's own buildOutbound produces (approve only when
+   *  the sender's existing allowance doesn't already cover the amount). Each step's XDR is a real,
+   *  distinct, signable transaction (different contract function, different account sequence per
+   *  TransactionBuilder call) — not two copies of the same placeholder — specifically so a fake
+   *  "submit" can derive a genuinely different, real-shaped tx hash per step. */
+  class TwoStepFakeAdapter implements RailAdapter {
+    readonly rail = "usdc-cctp" as const;
+    readonly store = new InMemoryTransferStore();
+    needsApprove = false;
+    /** Whatever markSubmitted (below) most recently recorded — mirrors the real
+     *  usdc-cctp adapter's own track(), which reports the STORED sourceTxHash (last write wins),
+     *  never a per-step value. This is exactly why the real double-registration bug mattered: the
+     *  approve step's hash would otherwise get overwritten by the burn step's real hash here too,
+     *  but registerOutboundTransfer itself — a SEPARATE call the relayer receives directly — used
+     *  to fire once per step with whatever hash was current AT THAT MOMENT, not the final one. */
+    lastSubmittedHash: string | undefined;
+
+    supports(): boolean {
+      return true;
+    }
+
+    markSubmitted(sourceTxHash: string): void {
+      this.lastSubmittedHash = sourceTxHash;
+    }
+
+    async quote(request: TransferRequest): Promise<Quote> {
+      return {
+        rail: "usdc-cctp",
+        request,
+        debit: amount(1_000_0000000n, 7),
+        credit: amount(1_000_000000n, 6),
+        dust: amount(0n, 7),
+        fees: [{ label: "Circle CCTP fee", amount: amount(0n, 6), symbol: "USDC" }],
+        etaSeconds: 20,
+        checks: [],
+        expiresAt: Date.now() + 30_000,
+        refundAddress: request.from.address,
+      };
+    }
+
+    /** Keyed by transferId, so the fixture's own prepareStep (below) can hand back the real,
+     *  already-built deferred step — matching a real adapter's own prepareStep contract: it
+     *  builds/returns the ONE step at a known index; step COUNT is fixed at build() time and never
+     *  changes (see @ferryline/sdk's isFinalStep doc comment). */
+    private readonly builtSteps = new Map<string, readonly TransferStep[]>();
+
+    async build(quote: Quote): Promise<BuiltTransfer> {
+      const transferId = newTransferId();
+      const steps: TransferStep[] = this.needsApprove
+        ? [
+            contractCallStep("approve", "Approve the TokenMessengerMinter to spend USDC"),
+            contractCallStep("deposit_for_burn", "Burn USDC toward base via CCTP"),
+          ]
+        : [contractCallStep("deposit_for_burn", "Burn USDC toward base via CCTP")];
+      this.builtSteps.set(transferId, steps);
+      await this.store.put({
+        transferId,
+        rail: "usdc-cctp",
+        request: quote.request,
+        createdAt: Date.now(),
+      } as never);
+      return { transferId, rail: "usdc-cctp", steps };
+    }
+
+    prepareStep(transferId: TransferId, stepIndex: number): Promise<TransferStep> {
+      const steps = this.builtSteps.get(transferId);
+      const step = steps?.[stepIndex];
+      if (!step) {
+        throw new Error(`no step at index ${String(stepIndex)} for ${transferId}`);
+      }
+      return Promise.resolve(step);
+    }
+
+    async *track(transferId: TransferId, _signal?: AbortSignal): AsyncIterable<TransferStatus> {
+      // Real behavior: track() is only ever consulted AFTER the final step's markSubmitted has
+      // already run (afterStepSubmitted starts tracking only once isFinalStep is true), so
+      // lastSubmittedHash here is always the real burn hash by construction — never the approve
+      // hash, the same guarantee registerOutboundTransfer itself depends on. Two yields, matching
+      // real adapters' own shape (a non-terminal status the UI renders as "tracking" — carrying
+      // sourceTxHash, per index.ts's own `case "tracking"` render — followed by the terminal
+      // "delivered" that moves the widget to "done"): a single "delivered"-only yield would skip
+      // the "tracking" phase entirely and never render source-tx at all.
+      yield {
+        transferId,
+        stage: "submitted",
+        updatedAt: Date.now(),
+        ...(this.lastSubmittedHash !== undefined ? { sourceTxHash: this.lastSubmittedHash } : {}),
+      };
+      yield {
+        transferId,
+        stage: "delivered",
+        updatedAt: Date.now(),
+        ...(this.lastSubmittedHash !== undefined ? { sourceTxHash: this.lastSubmittedHash } : {}),
+        // A real, distinguishable destination hash — index.ts's own "done" render only shows
+        // dest-tx when this is set, and that's the stable, real terminal-state signal this
+        // fixture's own tests wait on (see the "two-step transfer" test's own note on why).
+        destinationTxHash: "0xdest",
+      };
+    }
+  }
+
+  /** Narrows TransferStep to the one variant this fixture ever produces, so callers can read
+   *  `.xdr` directly without re-narrowing the full union at every use site. */
+  interface StellarTransactionStep {
+    readonly chain: "stellar";
+    readonly kind: "stellar-transaction";
+    readonly xdr: string;
+    readonly description: string;
+  }
+
+  /** Builds a real, distinct, signable Stellar invoke-contract transaction — the account's own
+   *  sequence number advances with each TransactionBuilder call against the same Account instance
+   *  (matching real Stellar SDK behavior), so two calls with different function names produce two
+   *  genuinely different XDR strings, never two copies of the same one. */
+  function contractCallStep(fn: string, description: string): StellarTransactionStep {
+    const tx = new TransactionBuilder(twoStepSourceAccount, {
+      fee: BASE_FEE,
+      networkPassphrase: NETWORK_PASSPHRASE,
+    })
+      .addOperation(new Contract(TOKEN_MESSENGER).call(fn))
+      .setTimeout(300)
+      .build();
+    return { chain: "stellar", kind: "stellar-transaction", xdr: tx.toXDR(), description };
+  }
+
+  let twoStepSourceAccount: Account;
+
+  function makeTwoStepElement(): {
+    el: FerrylineWidget;
+    adapter: TwoStepFakeAdapter;
+    registeredTransferIds: string[];
+    registeredSourceTxHashes: Map<string, string>;
+  } {
+    twoStepSourceAccount = new Account(SENDER, "200");
+    defineFerrylineWidget();
+    const el = document.createElement(WIDGET_TAG) as FerrylineWidget;
+    const adapter = new TwoStepFakeAdapter();
+    const registeredTransferIds: string[] = [];
+    const registeredSourceTxHashes = new Map<string, string>();
+    const client: WidgetClient = {
+      ferryline: {
+        config: { network: "testnet", rpcUrl: "https://soroban-testnet.stellar.org" },
+        quote: (r: TransferRequest) => adapter.quote(r),
+        build: (q: Quote) => adapter.build(q),
+        markSubmitted: (_transferId: TransferId, sourceTxHash: string) => {
+          // Real widget behavior under test: markSubmitted fires on EVERY step. Delegates to the
+          // adapter's own store (below), matching the real SDK — the LAST call's hash is what a
+          // real track() call reports back (see TwoStepFakeAdapter.track's own doc comment).
+          adapter.markSubmitted(sourceTxHash);
+          return Promise.resolve();
+        },
+        registerOutboundTransfer: (transferId: TransferId) => {
+          registeredTransferIds.push(transferId);
+          // Captured independently of whatever track()/the DOM later reports, so the assertions
+          // below can compare "what registerOutboundTransfer actually received" against "what was
+          // submitted for the real final step" without relying on rendering timing at all.
+          if (adapter.lastSubmittedHash !== undefined) {
+            registeredSourceTxHashes.set(transferId, adapter.lastSubmittedHash);
+          }
+          return Promise.resolve();
+        },
+        track: (id: TransferId, signal?: AbortSignal) => adapter.track(id, signal),
+        // Real deferred-step preparation: the SDK's own approve->burn flow defers the burn step
+        // until the approve confirms. Delegates to the adapter's own prepareStep (above), which
+        // hands back the already-built step at that index — matching a real adapter's own
+        // contract (build the ONE step at a known index; step count never changes, see
+        // @ferryline/sdk's isFinalStep doc comment).
+        prepareStep: (transferId: TransferId, stepIndex: number) =>
+          adapter.prepareStep(transferId, stepIndex),
+      } as never,
+      availableRails: ["usdc-cctp"],
+      networkPassphrase: NETWORK_PASSPHRASE,
+      submitStellarTransaction: (signedXdr: string) =>
+        // A real, distinguishable, deterministic "hash" derived from the actual signed XDR content
+        // — not a fixed stub — so a wrong-step registration (the real bug) would carry a
+        // DIFFERENT, independently-derivable-as-wrong hash, not silently pass by coincidence.
+        Promise.resolve(`0x${hashXdr(signedXdr)}`),
+    };
+    const wallet = new FakeWalletSession();
+    el.testClientOverride = client;
+    el.testWalletOverride = wallet;
+    document.body.append(el);
+    return { el, adapter, registeredTransferIds, registeredSourceTxHashes };
+  }
+
+  /** Deterministic, dependency-free string hash — good enough to prove "different input -> visibly
+   *  different, reproducible output" for this test's own assertions; not a real cryptographic hash
+   *  and not meant to be one. */
+  function hashXdr(input: string): string {
+    let h = 0;
+    for (let i = 0; i < input.length; i += 1) {
+      h = (Math.imul(31, h) + input.charCodeAt(i)) | 0;
+    }
+    return (h >>> 0).toString(16).padStart(8, "0");
+  }
+
+  it("two-step transfer (approve + burn): registerOutboundTransfer fires EXACTLY ONCE, carrying the real BURN hash, never the approve hash", async () => {
+    const { el, adapter, registeredTransferIds, registeredSourceTxHashes } = makeTwoStepElement();
+    adapter.needsApprove = true;
+    el.request = REQUEST;
+    await vi.waitFor(() =>
+      expect(el.shadowRoot?.querySelector('[part="build-button"]')).not.toBeNull(),
+    );
+    el.shadowRoot?.querySelector<HTMLButtonElement>('[part="build-button"]')?.click();
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('[part="preview"]')).not.toBeNull());
+    el.shadowRoot?.querySelector<HTMLButtonElement>('[data-wallet-module="freighter"]')?.click();
+    await vi.waitFor(() =>
+      expect(
+        el.shadowRoot?.querySelector('[part="confirm-button"]')?.hasAttribute("disabled"),
+      ).toBe(false),
+    );
+
+    // Step 1: sign and submit the APPROVE. registerOutboundTransfer must NOT have fired yet — this
+    // is the exact moment the real bug used to fire it, with the wrong hash. Waiting for the
+    // widget to re-render a fresh, re-enabled preview for the deferred burn step is itself proof
+    // afterStepSubmitted's "next step" branch ran (not the "final step" branch) — the real signal
+    // this test needs, more robust than asserting on the transient "Preparing…" status text, which
+    // afterStepSubmitted can resolve past before a poll observes it.
+    el.shadowRoot?.querySelector<HTMLButtonElement>('[part="confirm-button"]')?.click();
+    await vi.waitFor(() =>
+      expect(
+        adapter.lastSubmittedHash,
+        "markSubmitted must fire for the approve step",
+      ).toBeDefined(),
+    );
+    const approveHash = adapter.lastSubmittedHash;
+    expect(registeredTransferIds).toHaveLength(0);
+
+    // Step 2 (the real final step): the widget must re-render a fresh preview for the deferred
+    // burn step, requiring a real second confirm click — not an automatic continuation.
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('[part="preview"]')).not.toBeNull());
+    await vi.waitFor(() =>
+      expect(
+        el.shadowRoot?.querySelector('[part="confirm-button"]')?.hasAttribute("disabled"),
+      ).toBe(false),
+    );
+    el.shadowRoot?.querySelector<HTMLButtonElement>('[part="confirm-button"]')?.click();
+
+    await vi.waitFor(() => expect(registeredTransferIds).toHaveLength(1));
+    // Fires EXACTLY once — a second call (the real bug's own signature) never arrives, even after
+    // tracking runs to completion and the UI settles on its real terminal state. The fixture's own
+    // track() yields "submitted" then "delivered" with no real async delay between them (unlike a
+    // real network round-trip), so a polling wait can observe the transient "tracking" render
+    // (source-tx) landing and clearing in the same tick — asserting on the real terminal state
+    // (dest-tx, below) is the stable, real signal to wait on instead.
+    await vi.waitFor(() => {
+      expect(el.shadowRoot?.querySelector('[part="dest-tx"]')).not.toBeNull();
+    });
+    expect(registeredTransferIds).toHaveLength(1);
+
+    const [transferId] = registeredTransferIds;
+    const registeredHash = transferId ? registeredSourceTxHashes.get(transferId) : undefined;
+    expect(registeredHash).toBeDefined();
+    expect(approveHash).toBeDefined();
+    // The registered hash must be the real BURN step's hash (the final, real step) — and it must
+    // NOT equal the approve step's own hash. Checked directly against the independently-captured
+    // registration data (not the DOM — see the note above on why the transient tracking render
+    // isn't a stable thing to assert on in this fixture).
+    expect(registeredHash).not.toBe(approveHash);
+
+    el.remove();
+  });
+
+  it("one-step transfer (standing allowance, no approve needed): still registers correctly, exactly once", async () => {
+    const { el, adapter, registeredTransferIds, registeredSourceTxHashes } = makeTwoStepElement();
+    adapter.needsApprove = false;
+    el.request = REQUEST;
+    await vi.waitFor(() =>
+      expect(el.shadowRoot?.querySelector('[part="build-button"]')).not.toBeNull(),
+    );
+    el.shadowRoot?.querySelector<HTMLButtonElement>('[part="build-button"]')?.click();
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('[part="preview"]')).not.toBeNull());
+    el.shadowRoot?.querySelector<HTMLButtonElement>('[data-wallet-module="freighter"]')?.click();
+    await vi.waitFor(() =>
+      expect(
+        el.shadowRoot?.querySelector('[part="confirm-button"]')?.hasAttribute("disabled"),
+      ).toBe(false),
+    );
+    el.shadowRoot?.querySelector<HTMLButtonElement>('[part="confirm-button"]')?.click();
+
+    await vi.waitFor(() => expect(registeredTransferIds).toHaveLength(1));
+    // Real terminal state, not the transient tracking render — see the two-step test's own note.
+    await vi.waitFor(() => {
+      expect(el.shadowRoot?.querySelector('[part="dest-tx"]')).not.toBeNull();
+    });
+    expect(registeredTransferIds).toHaveLength(1);
+    const [transferId] = registeredTransferIds;
+    expect(transferId ? registeredSourceTxHashes.get(transferId) : undefined).toBeDefined();
+    el.remove();
+  });
+});
