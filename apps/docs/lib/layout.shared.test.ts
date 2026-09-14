@@ -13,4 +13,9 @@ describe("baseOptions", () => {
       }),
     );
   });
+
+  it("enables the real light/dark/system theme switcher, not the light/dark-only default", () => {
+    const options = baseOptions();
+    expect(options.themeSwitch?.mode).toBe("light-dark-system");
+  });
 });

@@ -11,16 +11,23 @@
  * fumadocs-ui's own neutral preset, so the docs site's chrome matches apps/site's brand, not a
  * generic gray theme.
  *
- * Only light-mode values are set (matching apps/site's own "no dark mode" choice — the reference
- * design has none to invert, see @ferryline/design-tokens' file-level comment) — the root layout
- * passes `theme={{ enabled: false }}` to fumadocs-ui's RootProvider, so its `.dark` variant of
- * these variables is never applied.
+ * Only *light*-mode values are overridden here, deliberately. @ferryline/design-tokens has no dark
+ * palette at all (its `semantic.onSurfaceDark` is "#000000" — dark *text*, not a dark *mode* — see
+ * the token file's own comment), and neither apps/site nor packages/widget has a dark design to
+ * port from; inventing a branded dark palette with nothing to ground it in isn't a real fix.
+ * Instead, dark mode (real and enabled now — see app/layout.tsx) falls back to fumadocs-ui's own
+ * real, already-imported default dark palette: the `.dark { --color-fd-background: ...; ... }`
+ * block in `fumadocs-ui/css/lib/default-colors.css` (pulled in via the `neutral.css` import above)
+ * applies automatically once next-themes puts a `.dark` class on `<html>`, since this block below
+ * only ever writes to `:root`/light and never touches `.dark`. Unbranded but real and coherent,
+ * disclosed here rather than silently left unmentioned.
  *
  * Disclosed gap, not silently reused or invented: fumadocs-ui's semantic `--color-fd-info`/
  * `-warning`/`-error`/`-success`/`-idea`/`-diff-*` variables (used inside its Callout/diff
  * components) have no equivalent role anywhere in @ferryline/design-tokens — apps/site has no
  * callout or diff component, so there is no real audited value to port. Left on fumadocs-ui's own
- * defaults rather than inventing brand-tinted versions that aren't grounded in a real source.
+ * defaults (light and dark) rather than inventing brand-tinted versions that aren't grounded in a
+ * real source.
  */
 @theme {
   --color-fd-background: #ffffff;
@@ -63,7 +70,10 @@
   }
 
   body {
-    @apply bg-white font-sans text-on-surface-dark antialiased;
+    /* fd-prefixed, not the brand `on-surface-*` tokens: those are fixed hex with no dark variant
+     * (see the @theme block's own comment above), while `bg-fd-background`/`text-fd-foreground`
+     * resolve through fumadocs-ui's real light/dark CSS variables and switch automatically. */
+    @apply bg-fd-background font-sans text-fd-foreground antialiased;
   }
 
   ::selection {

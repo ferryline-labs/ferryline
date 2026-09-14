@@ -18,5 +18,13 @@ export function baseOptions(): BaseLayoutProps {
         external: true,
       },
     ],
+    // fumadocs-ui's sidebar theme toggle defaults to a light/dark-only two-icon button
+    // (`mode: "light-dark"`, its own default — fumadocs-ui/layouts/shared/slots/theme-switch.js).
+    // "light-dark-system" is the real, documented alternative that renders all three as separate
+    // buttons (light/dark/system), matching what this site's RootProvider (app/layout.tsx) now
+    // actually wires up via next-themes.
+    themeSwitch: {
+      mode: "light-dark-system",
+    },
   };
 }
