@@ -81,6 +81,26 @@
   }
 }
 
+/*
+ * The desktop sidebar's footer pill (GitHub icon + theme switch, #nd-sidebar) is `rounded-lg` —
+ * 20px here, since @ferryline/design-tokens' own `radius` scale replaces Tailwind's stock one, not
+ * the 8px Tailwind default. fumadocs-ui's own sidebar component (layouts/docs/slots/sidebar.js)
+ * hardcodes both the GitHub icon link and, when rendering the theme switch in this slot, its
+ * buttons down to `rounded-md` (6px) — nowhere near 20px, so square-ish corners sit visibly inside
+ * the pill's much rounder ones. `rounded-full` isn't an invented style: it's fumadocs-ui's own
+ * *default* for this exact component (theme-switch.js's un-overridden `container` class already
+ * reads `rounded-full *:rounded-full`) — restoring it here rather than leaving sidebar.js's own
+ * flattened-for-this-slot override in place. Written unlayered (outside any @layer) so it reliably
+ * beats Tailwind's utility-layer classes regardless of selector specificity, per normal CSS
+ * cascade-layer rules — no !important needed. The mobile drawer's own theme switch isn't touched:
+ * it already keeps fumadocs-ui's rounded-full default (sidebar.js passes it only `className: "p-0"`
+ * there, no `*:rounded-md` override).
+ */
+#nd-sidebar a[aria-label="GitHub"],
+#nd-sidebar [data-theme-toggle] button {
+  border-radius: 9999px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   html {
     scroll-behavior: auto;
