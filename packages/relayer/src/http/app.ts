@@ -1,4 +1,5 @@
 import type { CctpNetwork, StellarRpc } from "@ferryline/sdk";
+import cors from "@fastify/cors";
 import {
   hasZodFastifySchemaValidationErrors,
   serializerCompiler,
@@ -41,6 +42,13 @@ export interface BuildAppOptions {
   readonly now?: () => number;
   readonly logger?: boolean;
   readonly outbound?: BuildAppOutboundOptions;
+  /** Browser origins allowed to call ANY route here cross-origin (inbound and outbound
+   *  registration/status routes alike — this is one Fastify instance, one CORS policy for the
+   *  whole app, not per-route). Defaults to `[]` (fail-closed: no browser origin is allowed) if
+   *  omitted — see RelayerConfig.corsOrigins's own doc comment in config.ts for the full
+   *  reasoning. Pass real origins here (from FERRYLINE_CORS_ORIGINS) to let a real
+   *  `<ferryline-widget>` page call this relayer directly from a browser. */
+  readonly corsOrigins?: readonly string[];
 }
 
 /**
@@ -53,6 +61,15 @@ export interface BuildAppOptions {
  */
 export function buildApp(options: BuildAppOptions): FastifyInstance {
   const app = Fastify({ logger: options.logger ?? false }).withTypeProvider<ZodTypeProvider>();
+
+  // Registered before any route: a real, pre-existing gap found and fixed during the
+  // outbound-auto-registration phase (see RelayerConfig.corsOrigins's own doc comment in
+  // config.ts for the full story) — without this, EVERY browser-based caller (the widget
+  // included) is silently blocked by the browser itself before the request ever reaches this
+  // process, confirmed directly against a real browser run. Fail-closed by construction: an
+  // empty `corsOrigins` list means `@fastify/cors`'s own `origin` option receives `[]`, which it
+  // treats as "no origin is ever allowed" — never a wildcard.
+  void app.register(cors, { origin: [...(options.corsOrigins ?? [])] });
 
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);

@@ -24,6 +24,52 @@ describe("loadRelayerConfig", () => {
       maxConcurrentTransfers: 20,
       registrationLimitMaxAttempts: 60,
       registrationLimitWindowMs: 60_000,
+      // Fail-closed default: NO browser origin allowed when FERRYLINE_CORS_ORIGINS is unset — see
+      // RelayerConfig.corsOrigins's own doc comment for why this is the safe default, not `["*"]`.
+      corsOrigins: [],
+    });
+  });
+
+  describe("corsOrigins", () => {
+    it("is an empty array (fail-closed) when FERRYLINE_CORS_ORIGINS is unset", () => {
+      expect(loadRelayerConfig(validEnv()).corsOrigins).toEqual([]);
+    });
+
+    it("is an empty array when FERRYLINE_CORS_ORIGINS is set to an empty or whitespace-only string", () => {
+      expect(loadRelayerConfig({ ...validEnv(), FERRYLINE_CORS_ORIGINS: "" }).corsOrigins).toEqual(
+        [],
+      );
+      expect(
+        loadRelayerConfig({ ...validEnv(), FERRYLINE_CORS_ORIGINS: "   " }).corsOrigins,
+      ).toEqual([]);
+    });
+
+    it("parses a single real origin", () => {
+      expect(
+        loadRelayerConfig({
+          ...validEnv(),
+          FERRYLINE_CORS_ORIGINS: "https://app.example.com",
+        }).corsOrigins,
+      ).toEqual(["https://app.example.com"]);
+    });
+
+    it("parses multiple comma-separated origins, trimming whitespace around each", () => {
+      expect(
+        loadRelayerConfig({
+          ...validEnv(),
+          FERRYLINE_CORS_ORIGINS:
+            "https://app.example.com, http://localhost:4173 ,https://widget.example.com",
+        }).corsOrigins,
+      ).toEqual(["https://app.example.com", "http://localhost:4173", "https://widget.example.com"]);
+    });
+
+    it("drops empty entries from trailing/doubled commas rather than keeping an empty-string origin", () => {
+      expect(
+        loadRelayerConfig({
+          ...validEnv(),
+          FERRYLINE_CORS_ORIGINS: "https://app.example.com,,",
+        }).corsOrigins,
+      ).toEqual(["https://app.example.com"]);
     });
   });
 

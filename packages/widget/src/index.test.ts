@@ -151,6 +151,12 @@ function makeElement(): { el: FerrylineWidget; adapter: FakeAdapter; wallet: Fak
       quote: (r: TransferRequest) => adapter.quote(r),
       build: (q: Quote) => adapter.build(q),
       markSubmitted: () => Promise.resolve(),
+      // Real method under test at the widget's own call site (afterStepSubmitted) — see that
+      // method's own doc comment for why it's called there and not from markSubmitted. This fixture
+      // fake never actually calls a relayer; it exists so the widget's own real call to it
+      // (unconditional on the final step, per the real bug fix) doesn't throw "not a function" and
+      // silently abort the tracking flow the way it did before this fixture was updated.
+      registerOutboundTransfer: () => Promise.resolve(),
       track: (id: TransferId, signal?: AbortSignal) => adapter.track(id, signal),
       prepareStep: () => {
         throw new Error("no deferred steps in this fixture");
@@ -429,6 +435,46 @@ describe("ferryline-widget — outbound CCTP delivery caveat (STEP 3 finding)", 
     expect(caveatText).toContain("submit the attested");
     el.remove();
   });
+
+  it(
+    "shows the RELAYER-CONFIGURED caveat variant when a relayer-url attribute is set — never " +
+      "overclaiming a guaranteed delivery-time SLA even then",
+    async () => {
+      const { el, adapter } = makeElement();
+      el.setAttribute("relayer-url", "http://localhost:8080"); // real attribute, real getter — see index.ts's relayerUrl
+      adapter.statuses = [
+        { transferId: "" as TransferId, stage: "verified", updatedAt: Date.now() },
+      ];
+      el.request = REQUEST;
+      await vi.waitFor(() =>
+        expect(el.shadowRoot?.querySelector('[part="build-button"]')).not.toBeNull(),
+      );
+      el.shadowRoot?.querySelector<HTMLButtonElement>('[part="build-button"]')?.click();
+      await vi.waitFor(() =>
+        expect(el.shadowRoot?.querySelector('[part="preview"]')).not.toBeNull(),
+      );
+      el.shadowRoot?.querySelector<HTMLButtonElement>('[data-wallet-module="freighter"]')?.click();
+      await vi.waitFor(() =>
+        expect(
+          el.shadowRoot?.querySelector('[part="confirm-button"]')?.hasAttribute("disabled"),
+        ).toBe(false),
+      );
+      el.shadowRoot?.querySelector<HTMLButtonElement>('[part="confirm-button"]')?.click();
+
+      await vi.waitFor(() => {
+        expect(el.shadowRoot?.querySelector('[part="delivery-caveat"]')).not.toBeNull();
+      });
+      const caveatText =
+        el.shadowRoot?.querySelector('[part="delivery-caveat"]')?.textContent ?? "";
+      // Says a relayer is registered/handling it...
+      expect(caveatText).toContain("registered with the configured relayer");
+      // ...but STILL never claims this is a guaranteed SLA — the same honesty standard as the
+      // no-relayer variant, per OUTBOUND_SCOPE.md's own "not a guaranteed delivery-time SLA" section.
+      expect(caveatText).toContain("not a guaranteed delivery-time");
+      expect(caveatText).toContain("permissionless");
+      el.remove();
+    },
+  );
 
   it("does NOT show the caveat once actually delivered — it's specific to the 'verified' waiting stage", async () => {
     const { el, adapter } = makeElement();

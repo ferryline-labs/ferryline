@@ -5,9 +5,14 @@
  * docker-composed relayer instance — this is that same real API, now called from inside the
  * component instead of a standalone script.
  *
- * Outbound sends never call anything here (per the roadmap's own architecture: outbound goes
- * straight from the SDK to Stellar's rail contracts, no relayer in that path at all — confirmed
- * directly from the relayer's own schema in STEP 1, `sourceTxHash` is typed as an EVM tx hash).
+ * Outbound sends never call anything in THIS FILE (its `sourceTxHash`/`RelayerConfig` shapes here
+ * are inbound-specific — `sourceTxHash` is typed as an EVM tx hash, and the endpoint is
+ * `/transfers`, not `/outbound-transfers`). This is no longer "no relayer in that path at all",
+ * though: outbound sends now optionally register with a Ferryline outbound relayer too, via
+ * `@ferryline/sdk`'s own `Ferryline.registerOutboundTransfer` — a separate code path with its own
+ * real `POST /outbound-transfers` call, not this file's `registerTransfer`. See
+ * `packages/sdk/src/index.ts` and this package's own `index.ts` (the `afterStepSubmitted` call
+ * site) for that direction's real wiring.
  */
 export interface RelayerConfig {
   readonly url: string;

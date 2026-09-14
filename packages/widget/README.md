@@ -36,12 +36,12 @@ a property, imperatively, from your own page's JS.
 
 ## Attributes
 
-| Attribute         | Values                       | Default         | Notes                                                                                    |
-| ----------------- | ---------------------------- | --------------- | ---------------------------------------------------------------------------------------- |
-| `network`         | `testnet` \| `mainnet`       | `testnet`       | Changing it tears down and rebuilds the widget's internal client/wallet session.         |
-| `rpc-url`         | a Soroban RPC URL            | network default | Override if you run your own RPC node.                                                   |
-| `relayer-url`     | a Ferryline relayer base URL | —               | Required for inbound (EVM → Stellar) CCTP tracking; see `registerInboundTransfer` below. |
-| `relayer-api-key` | a bearer token               | —               | Sent as `Authorization: Bearer <key>` to the relayer.                                    |
+| Attribute         | Values                       | Default         | Notes                                                                                                                                                                                                                                          |
+| ----------------- | ---------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `network`         | `testnet` \| `mainnet`       | `testnet`       | Changing it tears down and rebuilds the widget's internal client/wallet session.                                                                                                                                                               |
+| `rpc-url`         | a Soroban RPC URL            | network default | Override if you run your own RPC node.                                                                                                                                                                                                         |
+| `relayer-url`     | a Ferryline relayer base URL | —               | Used for BOTH directions: required for inbound (EVM → Stellar) CCTP tracking (see `registerInboundTransfer` below), and enables automatic outbound (Stellar → EVM) registration if set (see "Outbound (Stellar → EVM) automatic relay" below). |
+| `relayer-api-key` | a bearer token               | —               | Sent as `Authorization: Bearer <key>` to the relayer.                                                                                                                                                                                          |
 
 ## Rail availability: testnet is CCTP-only, by construction
 
@@ -78,11 +78,10 @@ Friendbot (`https://friendbot.stellar.org`, XLM) and Circle's testnet faucet
 
 ## Inbound (EVM → Stellar) tracking
 
-Outbound Stellar → EVM sends are fully self-contained: quote, build, sign, submit, and track all
-happen through this widget and `@ferryline/sdk` directly. Inbound EVM → Stellar CCTP transfers need
-a Ferryline relayer (a separate service) to watch the source chain and complete delivery on
-Stellar — the widget doesn't drive the source-chain wallet itself (that's whatever wallet the user
-already used on the EVM side). Once you have a real EVM burn transaction hash, call:
+Inbound EVM → Stellar CCTP transfers need a Ferryline relayer (a separate service) to watch the
+source chain and complete delivery on Stellar — the widget doesn't drive the source-chain wallet
+itself (that's whatever wallet the user already used on the EVM side). Once you have a real EVM
+burn transaction hash, call:
 
 ```ts
 await widget.registerInboundTransfer(transferId, "ethereum-sepolia", sourceTxHash);
@@ -90,6 +89,25 @@ await widget.registerInboundTransfer(transferId, "ethereum-sepolia", sourceTxHas
 
 This calls the configured relayer's real `POST /transfers` then polls `GET /transfers/:id`,
 rendering live status inline.
+
+## Outbound (Stellar → EVM) automatic relay
+
+Quote, build, sign, and submit for an outbound send all happen through this widget and
+`@ferryline/sdk` directly, same as always. What's new: once the transfer's real burn transaction is
+confirmed, the widget automatically registers it with the configured relayer (if `relayer-url` is
+set) for automatic completion — no separate call needed, unlike inbound's `registerInboundTransfer`
+above. This is `@ferryline/sdk`'s `Ferryline.registerOutboundTransfer`, called internally once the
+burn's final on-chain step confirms (see that method's own doc comment in
+`packages/sdk/src/index.ts` for exactly why it fires there and not any earlier).
+
+If `relayer-url` is not set, outbound sends still work exactly as before: the widget's own
+tracking UI surfaces an honest caveat once attestation completes (see the `delivery-caveat` part),
+since `receiveMessage` on the destination chain is genuinely permissionless — anyone, including you
+or the recipient, can complete delivery manually at any time; see
+[`e2e/submit-receive-message.mjs`](e2e/submit-receive-message.mjs) for a real, working example.
+Even with a relayer configured, this is still not a guaranteed delivery-time SLA — the caveat
+reflects that too, worded differently depending on whether a relayer is registered on the
+transfer's behalf.
 
 ## Theming
 
@@ -131,24 +149,27 @@ Shadow-DOM `part` attributes are also exposed for deeper styling via `::part()`:
 `source-tx`, `dest-tx`, `failure`, `faucets`, `faucet-link`, `wallet-error`, `inbound-status`,
 `delivery-caveat`.
 
-## Known gap: outbound CCTP delivery is not automatically relayed (STEP 3 finding, 2026-09-12)
+## Outbound CCTP delivery: automatic relay now exists, still not a guaranteed SLA (updated)
 
-For an outbound (Stellar → EVM) USDC transfer, the widget's tracking correctly advances to
-"verified" once Circle's attestation completes — but delivery on the destination chain is **not
-automatic**, on testnet or mainnet. Confirmed directly against Circle's own CCTP technical guide
+Circle's own CCTP protocol still has no automatic relay for outbound (Stellar → EVM) delivery, on
+testnet or mainnet, confirmed directly against Circle's own CCTP technical guide
 (developers.circle.com/cctp/references/technical-guide): "An API consumer must query this
 attestation and submits it onchain to the destination domain's MessageTransmitterV2#receiveMessage
 function" — with no testnet/mainnet distinction anywhere in that document, and no mention of
 Circle operating a relayer for this. Third-party aggregators (LI.FI, Squid) and Wormhole's own CCTP
-integration each run their own separate relay service for exactly this reason.
+integration each run their own separate relay service for exactly this reason — and now Ferryline
+does too: this widget automatically registers with a configured Ferryline outbound relayer (see
+"Outbound (Stellar → EVM) automatic relay" above), a real, testnet-proven, self-hostable service
+(`packages/relayer/`), closing the gap as the default path when one is configured.
 
-The widget surfaces this honestly (see the `delivery-caveat` part above) rather than implying an
-ETA-bound "just wait" status. `receiveMessage` is permissionless — the sender, the recipient, or
-any integrator's own relayer can submit it, given a small amount of destination-chain gas. See
-`e2e/submit-receive-message.mjs` for a real, working example of doing this manually, and
-`technical-doc.md`'s threat-model table for the full, sourced writeup and severity assessment.
-Building a dedicated outbound relayer (mirroring Ferryline's existing inbound one) is explicitly
-out of scope for this package and is a real candidate for a future phase.
+Still not a guaranteed delivery-time SLA, with or without a relayer: `receiveMessage` remains
+permissionless by CCTP's own design — the sender, the recipient, or any integrator's own relayer
+can submit it, given a small amount of destination-chain gas, if the configured relayer is
+unavailable, misconfigured, or its own daily spend ceiling is exhausted. The widget surfaces this
+honestly (see the `delivery-caveat` part above, which reads differently depending on whether a
+relayer is configured) rather than implying an ETA-bound "just wait" status either way. See
+`e2e/submit-receive-message.mjs` for a real, working example of manual completion, and
+`packages/relayer/OUTBOUND_THREAT_MODEL.md` for the full, sourced design/risk write-up.
 
 ## Scope note (v0.x)
 

@@ -220,6 +220,7 @@ const app = buildApp({
   dailySpendCeilingStroops: spendConfig.dailySpendCeilingStroops,
   registrationLimiter,
   version: config.version,
+  corsOrigins: config.corsOrigins,
   ...(outboundAppOptions ? { outbound: outboundAppOptions } : {}),
 });
 
@@ -228,6 +229,11 @@ console.error(`ferryline-relayer listening on http://${config.host}:${String(con
 console.error(
   `ferryline-relayer: outbound direction is ${runOutbound ? "ENABLED" : "disabled"} ` +
     `(FERRYLINE_OUTBOUND_ENABLED)`,
+);
+console.error(
+  config.corsOrigins.length > 0
+    ? `ferryline-relayer: CORS allows browser origins: ${config.corsOrigins.join(", ")}`
+    : "ferryline-relayer: CORS is fail-closed — no browser origin is allowed (set FERRYLINE_CORS_ORIGINS to change this)",
 );
 
 const shutdown = (): void => {

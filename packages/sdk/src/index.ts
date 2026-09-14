@@ -4,6 +4,7 @@ import type {
   RailAdapter,
   RailId,
   TransferId,
+  TransferRecord,
   TransferRequest,
   TransferStatus,
   TransferStep,
@@ -17,8 +18,15 @@ export interface FerrylineConfig {
   readonly network: FerrylineNetwork;
   /** Stellar RPC endpoint. */
   readonly rpcUrl: string;
-  /** Ferryline relayer endpoint, needed for inbound USDC. Optional until the relayer exists. */
+  /**
+   * Ferryline relayer endpoint, shared by both directions: inbound (EVM -> Stellar) registration
+   * and outbound (Stellar -> EVM) registration both read this same value. Optional — a caller with
+   * no relayer configured still gets a fully working SDK for quote/build/track; only the
+   * register-with-a-relayer calls become no-ops (see registerOutboundTransfer's own doc comment).
+   */
   readonly relayerUrl?: string;
+  /** Bearer token for the relayer configured above, if it requires one. Ignored if relayerUrl is unset. */
+  readonly relayerApiKey?: string;
   /** Where transfers are remembered between build() and track(). Defaults to in-memory. */
   readonly store?: TransferStore;
 }
@@ -74,9 +82,136 @@ export class Ferryline {
     return await adapter.prepareStep(transferId, stepIndex);
   }
 
-  /** Tell Ferryline which hash the wallet got back after submitting the first step. */
+  /**
+   * Tell Ferryline which hash the wallet got back after submitting a step. Called once per SIGNED
+   * step, including intermediate ones (e.g. an outbound CCTP transfer's approve step, before its
+   * burn) — `markSubmitted` itself has no notion of "final", it just records whatever hash it's
+   * given for later reads (see TransferStore.markSubmitted).
+   *
+   * IMPORTANT, learned the hard way (see registerOutboundTransfer's own doc comment for the full
+   * story): this method does NOT trigger outbound relayer registration itself, specifically BECAUSE
+   * it is called after every step, not just the final one. A caller (the widget, or any other
+   * integrator) must call registerOutboundTransfer explicitly, and ONLY once the transfer's FINAL
+   * step has been confirmed — never from inside a per-step callback that also fires for
+   * intermediate steps. See isFinalStep, a small exported helper for identifying that point
+   * correctly without reimplementing `stepIndex === built.steps.length - 1` at every call site.
+   */
   markSubmitted(transferId: TransferId, sourceTxHash: string): Promise<void> {
     return this.store.markSubmitted(transferId, sourceTxHash);
+  }
+
+  /**
+   * Registers an outbound (Stellar -> EVM) CCTP transfer with the configured Ferryline relayer
+   * (FerrylineConfig.relayerUrl/relayerApiKey), so it gets picked up and completed automatically —
+   * the SDK-level mirror of the widget's own registerInboundTransfer (packages/widget/src/index.ts),
+   * using the same real POST /outbound-transfers + GET /outbound-transfers/:id relayer API the
+   * outbound relayer service (packages/relayer/) actually implements.
+   *
+   * ============================================================================================
+   * CALL THIS ONLY AFTER THE FINAL STEP OF A build() RESULT HAS BEEN CONFIRMED — never from a
+   * per-step callback that also runs for intermediate steps. This is not a stylistic preference;
+   * calling it earlier is a REAL BUG THIS PROJECT ALREADY SHIPPED AND HAD TO FIX: an outbound CCTP
+   * transfer that needs an approve step first has TWO signable steps (approve, then burn), and
+   * `markSubmitted` is called once per step. Triggering registration from inside `markSubmitted`
+   * itself (the original, incorrect design) meant registration fired FIRST with the approve
+   * transaction's hash — not a CCTP burn at all, so Iris has no attestation for it — and then AGAIN
+   * with the real burn hash. Since the relayer's own primary key is the transferId (not the source
+   * tx hash), the second, CORRECT registration was rejected as a duplicate of the first, WRONG one
+   * — silently losing the real registration. Use isFinalStep(built, stepIndex) (exported below) to
+   * find the right point: `if (isFinalStep(built, stepIndex)) { await
+   * ferryline.registerOutboundTransfer(built.transferId); }`, called only once, after that specific
+   * step's real tx hash has already been recorded via markSubmitted.
+   * ============================================================================================
+   *
+   * Not called automatically by markSubmitted or anywhere else in this class — an integrator (the
+   * widget, or a raw SDK caller) must call this themselves at the point described above. It is
+   * side-effect-free to call more than once for the same transferId (each call independently gates
+   * itself, see below), but only the correct, final-step, real-burn-tx-hash call actually succeeds
+   * against the relayer — see gate 2, and the primary-key note above for why calling it early
+   * fails silently rather than "just registering later, correctly, on retry."
+   *
+   * Three real "do nothing" gates, each deliberate:
+   *   1. No relayerUrl configured at all -> skipped silently, not an error. Per the project's own
+   *      "works without a relayer" self-hosting story (same reasoning FerrylineConfig.relayerUrl's
+   *      own doc comment states): an integrator who has not set up a relayer must still get a
+   *      fully working SDK for quote/build/track, not a thrown error from something they never
+   *      opted into.
+   *   2. The transfer is not an outbound CCTP transfer (any other rail, or the inbound direction)
+   *      -> skipped silently. Detected via ONLY the rail-agnostic, already-public
+   *      TransferRecord.rail/request fields (`rail === "usdc-cctp"` and
+   *      `request.from.chain === "stellar"` — the identical predicate the widget's own
+   *      isOutboundCctp already uses), never by reaching into the adapter-private `railRef` (see
+   *      TransferStore's own doc comment: railRef is "opaque to everything except the adapter that
+   *      wrote it").
+   *   3. Registration itself fails for ANY reason (relayer unreachable, misconfigured, a non-201
+   *      response — including the duplicate-tx-hash 409 the bug above would produce, a network
+   *      error) -> caught and logged via `console.error`, NEVER thrown. The underlying burn already
+   *      happened on-chain by the time this runs (only ever meaningful after a real, already-
+   *      submitted tx hash is recorded) — a relayer being down (or a caller's own bug) must never
+   *      be able to make this method fail the caller's own build/sign/track flow. See
+   *      index.test.ts's own dedicated tests proving this explicitly: simulating a relayer failure
+   *      and confirming the underlying transfer flow still completes normally, AND reproducing the
+   *      two-step approve+burn scenario to confirm registration fires exactly once, with the real
+   *      burn hash.
+   */
+  async registerOutboundTransfer(transferId: TransferId): Promise<void> {
+    const { relayerUrl, relayerApiKey } = this.config;
+    if (!relayerUrl) {
+      return; // gate 1: no relayer configured at all — see this method's own doc comment.
+    }
+    let record: TransferRecord | undefined;
+    try {
+      record = await this.store.get(transferId);
+    } catch (error) {
+      console.error(
+        `Ferryline.registerOutboundTransfer: failed to read transfer ${transferId} from the store; skipping relayer registration: ${String(error)}`,
+      );
+      return;
+    }
+    if (record?.rail !== "usdc-cctp" || record.request.from.chain !== "stellar") {
+      return; // gate 2: not an outbound CCTP transfer — see this method's own doc comment.
+    }
+    if (!record.sourceTxHash) {
+      // Should not happen: registerOutboundTransfer is only ever called from markSubmitted, right
+      // after the store write that sets this. Logged, not thrown — same "never break the caller's
+      // flow" rule as every other branch here.
+      console.error(
+        `Ferryline.registerOutboundTransfer: transfer ${transferId} has no sourceTxHash recorded yet; skipping relayer registration.`,
+      );
+      return;
+    }
+    try {
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (relayerApiKey) {
+        headers["Authorization"] = `Bearer ${relayerApiKey}`;
+      }
+      const response = await fetch(`${relayerUrl}/outbound-transfers`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          transferId,
+          sourceTxHash: record.sourceTxHash,
+          destinationChain: record.request.to.chain,
+          rail: "usdc-cctp",
+        }),
+      });
+      if (response.status !== 201) {
+        const body: unknown = await response.json().catch(() => undefined);
+        const message =
+          body && typeof body === "object" && "error" in body
+            ? String(body.error)
+            : `HTTP ${String(response.status)}`;
+        throw new Error(`relayer registration failed: ${message}`);
+      }
+    } catch (error) {
+      // Gate 3: registration failing for any reason must never propagate — see this method's own
+      // doc comment for the full reasoning. The real on-chain burn already happened; a relayer
+      // being unreachable/misconfigured is the relayer's problem to fix, not a reason to fail the
+      // transfer the caller already successfully submitted.
+      console.error(
+        `Ferryline.registerOutboundTransfer: registering transfer ${transferId} with the relayer at ${relayerUrl} failed (the burn itself is unaffected and already on-chain): ${String(error)}`,
+      );
+    }
   }
 
   async *track(transferId: TransferId, signal?: AbortSignal): AsyncIterable<TransferStatus> {
@@ -106,6 +241,22 @@ export class Ferryline {
     }
     return adapter;
   }
+}
+
+/**
+ * True if `stepIndex` is the LAST step in `built.steps` — the one, correct point at which to call
+ * registerOutboundTransfer (see that method's own doc comment for why calling it any earlier is a
+ * real, previously-shipped bug, not a style choice). A tiny helper, not a new field on TransferStep
+ * itself: `built.steps` is a plain, already-ordered array whose length is fixed at build() time and
+ * never changes as deferred steps are prepared (prepareStep assembles ONE step at a known index; it
+ * never changes how many steps the transfer has — confirmed directly against every rail adapter's
+ * own prepareStep implementation) — so `stepIndex === built.steps.length - 1` is already the
+ * complete, correct answer. This function exists only so every caller uses that one, canonical,
+ * tested comparison instead of each reimplementing it (and each independently risking the same
+ * off-by-one/wrong-step mistake this exact bug already produced once, inside the widget itself).
+ */
+export function isFinalStep(built: Pick<BuiltTransfer, "steps">, stepIndex: number): boolean {
+  return stepIndex === built.steps.length - 1;
 }
 
 export type {

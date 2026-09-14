@@ -54,6 +54,27 @@ export interface RelayerConfig {
    */
   readonly registrationLimitMaxAttempts: number;
   readonly registrationLimitWindowMs: number;
+  /**
+   * Browser-facing origins allowed to call this relayer cross-origin (e.g. the real page hosting
+   * `<ferryline-widget>`, if that page runs on a different origin than this relayer itself — the
+   * normal case, since the widget and relayer are separate deployments). A real, pre-existing gap
+   * found and fixed during the outbound-auto-registration phase: this relayer had NO CORS
+   * configuration at all, which silently blocks EVERY browser-based caller (the widget included)
+   * with no server-side error to point at — the browser itself refuses the request before it ever
+   * reaches this process, confirmed directly against a real browser run.
+   *
+   * Deliberately FAIL-CLOSED when unset, not fail-open and not a refusal to start: an empty array
+   * (no origins allowed) rather than a permissive wildcard. This is safe by construction for the
+   * common case — a relayer with no browser-based integrator at all (server-to-server callers,
+   * scripts, `curl`) is completely unaffected either way, since CORS preflight only applies to
+   * cross-origin `fetch`/`XMLHttpRequest` calls a browser itself makes; same-origin and non-browser
+   * callers were never subject to it. Refusing to START over this would break every existing
+   * self-hosted deployment on upgrade, for a value most deployments never need to set — worse than
+   * the "browser callers get a clear CORS error and must opt in" default this chose instead. NEVER
+   * defaults to `*`/allow-all: an operator who wants specific browser origins to work must name
+   * them explicitly.
+   */
+  readonly corsOrigins: readonly string[];
 }
 
 function requireEnv(env: NodeJS.ProcessEnv, name: string, hint: string): string {
@@ -141,5 +162,19 @@ export function loadRelayerConfig(env: NodeJS.ProcessEnv = process.env): Relayer
       env["FERRYLINE_REGISTRATION_LIMIT_WINDOW_MS"] ?? "60000",
       10,
     ),
+    corsOrigins: parseCorsOrigins(env["FERRYLINE_CORS_ORIGINS"]),
   };
+}
+
+/** Comma-separated list of allowed browser origins, trimmed, empty entries dropped. Unset/empty
+ *  input -> an empty array (fail-closed: no cross-origin browser calls allowed) — see
+ *  RelayerConfig.corsOrigins's own doc comment for why this is the safe default, not a wildcard. */
+function parseCorsOrigins(raw: string | undefined): readonly string[] {
+  if (!raw || raw.trim() === "") {
+    return [];
+  }
+  return raw
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter((origin) => origin.length > 0);
 }

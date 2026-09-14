@@ -51,6 +51,7 @@ function harness(
     includeOutbound?: boolean;
     outboundCeilingWei?: bigint;
     registrationLimiter?: InMemoryRegistrationLimiter;
+    corsOrigins?: readonly string[];
   } = {},
 ): Harness {
   const repo = new InMemoryTransferRepository();
@@ -77,6 +78,7 @@ function harness(
     version: "test",
     startedAt: 0,
     now: () => 5000,
+    corsOrigins: overrides.corsOrigins ?? [],
     ...(includeOutbound
       ? {
           outbound: {
@@ -426,6 +428,41 @@ describe("GET /healthz — outbound extension (STEP 4: extends the existing rout
     }>();
     expect(body.sponsor.account).toBe(SPONSOR);
     expect(body.dailySpend.spentStroops).toBe("0");
+    await h.app.close();
+  });
+});
+
+describe("CORS applies to the OUTBOUND route too — one Fastify instance, one policy for both directions", () => {
+  // The real, pre-existing gap this confirms fixing for (see http/app.test.ts's own CORS describe
+  // block for the fuller story and the fail-closed-by-default proof): @fastify/cors is registered
+  // once for the whole app in buildApp, not per-route, so it must apply identically to
+  // /outbound-transfers as it does to /transfers — this test proves that directly rather than
+  // assuming "it's the same plugin, so it must work the same everywhere."
+
+  it("a real preflight OPTIONS request to /outbound-transfers is fail-closed by default (no configured origins)", async () => {
+    const h = harness(); // corsOrigins defaults to [] in this harness too
+    const response = await h.app.inject({
+      method: "OPTIONS",
+      url: "/outbound-transfers",
+      headers: {
+        origin: "https://some-widget-host.example.com",
+        "access-control-request-method": "POST",
+      },
+    });
+    expect(response.headers["access-control-allow-origin"]).toBeUndefined();
+  });
+
+  it("an ALLOWED origin's real preflight OPTIONS request to /outbound-transfers gets a matching Access-Control-Allow-Origin header", async () => {
+    const h = harness({ corsOrigins: ["https://widget.example.com"] });
+    const response = await h.app.inject({
+      method: "OPTIONS",
+      url: "/outbound-transfers",
+      headers: {
+        origin: "https://widget.example.com",
+        "access-control-request-method": "POST",
+      },
+    });
+    expect(response.headers["access-control-allow-origin"]).toBe("https://widget.example.com");
     await h.app.close();
   });
 });
