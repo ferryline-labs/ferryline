@@ -329,6 +329,19 @@ one auth entry), the sender's trustline and account ledger entries, and `getTran
 Decoded: `quote_oft` limit min 0 / max 18446744073709551615, receipt sent == received == 12345670 (no bps fee on
 this route), `quote_send` native_fee 3558611 stroops.
 
+### 2.7 Real outbound USDT0 send, signed and submitted (added 2026-09-14, phase 7)
+
+The read-only simulations in §2.6 are now backed by a real, wallet-signed, submitted mainnet
+transaction: 1.0000000 USDT0, Stellar -> Arbitrum, driven through the real `<ferryline-widget>` and
+`Usdt0LayerZeroAdapter`. Source burn
+`e14b5e1314e6a7544a5171f09de0e672a06c99deeb567a52933ec9aa784863f6` (Horizon: `successful: true`);
+destination mint `0x55821464151eab4f68f143640ee2394c145ed6d9334e9a66b1a801ecf99910c4` on Arbitrum,
+independently confirmed via a direct `eth_call`/`eth_getTransactionReceipt` against the real USDT0
+token contract (not solely LayerZero Scan's own report, though Scan agreed: `DELIVERED`, all 3 DVNs
+`SUCCEEDED`). Real elapsed time ~30m19s, matching the adapter's own `OBSERVED_ETA_SECONDS`. Full
+record: [verified/experiments/2026-09-14-widget-usdt0-mainnet-outbound.md](verified/experiments/2026-09-14-widget-usdt0-mainnet-outbound.md).
+Inbound USDT0 (§4 items 1-2) remains unresolved — this run exercised outbound only.
+
 ---
 
 ## 3b. CCTP facts added in phase 2 (2026-09-11)
