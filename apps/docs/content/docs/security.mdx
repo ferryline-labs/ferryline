@@ -1,0 +1,180 @@
+---
+title: Security & Verification
+description: What's actually been checked against a real network, what's still open, and the tests that back each structural guarantee.
+---
+
+Ferryline's stated discipline is "verified, not assumed": every non-obvious claim this project
+makes about an upstream protocol or its own code is either checked against a real deployed
+contract or a real transaction, or it's explicitly marked unverified, in the open, rather than
+quietly assumed to be fine. That discipline lives in two working documents in the repository —
+`packages/core/VERIFIED.md` for upstream protocol facts, and `ARCHITECTURE.md`'s own security
+model for what the code itself guarantees — and a directory of dated,
+real-money-or-explicitly-BLOCKED experiment reports (`packages/core/verified/experiments/`)
+underneath both. This page is the public version of that record: the strongest findings, the
+guarantees a real test enforces, and — just as important — what's still genuinely open.
+
+## The two fields that permanently strand CCTP funds
+
+The single highest-consequence fact in this codebase isn't a bug Ferryline found — it's a rule
+Circle states plainly in its own Stellar reference, quoted here verbatim:
+
+> Always use CctpForwarder when routing CCTP USDC to a Stellar address. Set both mintRecipient and
+> destinationCaller to the CctpForwarder contract address. If destinationCaller is wrong, the
+> forwarder cannot complete the transfer. If mintRecipient is set to a user account or muxed
+> address, USDC is not sent to the forwarder. In either case, funds become permanently stuck and
+> cannot be recovered.
+
+Both `mintRecipient` and `destinationCaller` must equal the CctpForwarder contract's own address,
+not the real recipient. The real recipient is encoded separately, inside hook data, as its
+strkey string (G, C, or M), UTF-8 encoded — never as `bytes32`. Getting this backwards doesn't
+fail loudly; it sends real USDC to an address nobody controls, with no recovery path. Ferryline's
+`usdc-cctp` adapter hard-codes the forwarder in both fields and only ever writes the caller's real
+recipient into hook data — see [Core Concepts](/docs/core-concepts#three-problems-solved-once) for
+how that's exposed at the SDK level.
+
+## A real mainnet USDT0 send, decoded and cross-checked against two independent sources
+
+Rather than trust LayerZero's OFT interface from documentation alone, this project decoded a real
+mainnet Stellar transaction and checked its effects against the destination chain and LayerZero's
+own indexer, independently of each other:
+
+```
+Stellar tx 9d130f64b3a4a9316222f8d7e246fe6992225e9438d45ca573e61540f8495f8a (ledger 64288127)
+
+send(
+  send_param = { amount_ld: 10000000, min_amount_ld: 10000000, dst_eid: 30109 (Polygon),
+                 to: 000000000000000000000000e4b5fcce3cfbc86fdbb9fae472b14eea68fb301f },
+  fee        = { native_fee: 3720767, zro_fee: 0 }
+)
+```
+
+- **The destination chain agrees.** The Polygon receipt for transaction `0x35fea5be…` shows an
+  ERC-20 `Transfer` of `1000000` (1.000000 USDT, 6 decimals) landing at exactly
+  `0xe4b5fcce3cfbc86fdbb9fae472b14eea68fb301f` — the same 20-byte address recovered from the
+  Stellar `to` field's last 20 bytes (12 zero bytes followed by the EVM address).
+- **The decimal conversion is verified end to end**, not just documented: 10,000,000 stroops (7
+  decimals) debited on Stellar, 1,000,000 (6 decimals) minted on Polygon.
+- **LayerZero Scan agrees too.** Querying `scan.layerzero-api.com` for this same hash returned
+  `status: { name: "DELIVERED", message: "Executor transaction confirmed" }`. Time from Stellar
+  ledger close to executor confirmation was 1834 and 1838 seconds for the two sends recorded this
+  way.
+
+## 13 for 13: real Stellar-source CCTP burns, observed on Iris production
+
+Separately from any transaction Ferryline itself submitted, this project pulled every
+Stellar-source CCTP burn Circle's production Iris attestation service had processed over roughly
+the prior six days, as of the 2026-09-11 check: **13 of 13** came back `status: "complete"`, with
+`maxFee "0"` and `feeExecuted "0"` on every single one. Destinations split across Base (6), Solana
+(5), and Polygon (7). Twelve of the thirteen requested `minFinalityThreshold: 2000` and were
+executed at 2000 as asked; **one requested 1000 and was silently executed at 2000 instead**
+(`d4337ce7…`, a 1 USDC transfer to Base). These were other operators' real transactions, observed
+rather than run by this project — evidence toward, not a replacement for, the first-party
+confirmations below.
+
+## `max_fee = 0` and `min_finality_threshold`, confirmed with real, first-party transactions
+
+The SDK requires both `maxFee` and `minFinalityThreshold` on every CCTP request and ships no
+default for either (see [Core Concepts](/docs/core-concepts#why-maxfee-and-minfinalitythreshold-have-no-default)
+for why the policy stays in place even after these confirmations). On 2026-09-12, a funded testnet
+operator account ran three real burns specifically to resolve what the 13/13 mainnet observation
+above could only suggest:
+
+| Parameter tested                | Real transaction                                                   | Result                                                                                                                                               |
+| ------------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `max_fee = 0`                   | `cb5c9637aa89cf1f93da412677f6637522ce7eb49481422702d6fdd1680c3a5f` | Horizon `successful: true` (ledger 4642847); Circle attestation `status: "complete"`, `maxFee: "0"`, `feeExecuted: "0"`                              |
+| `min_finality_threshold = 1000` | `7fa42abe7baef4334785fd7c5baf0cac01155f732366389030790d75e9b7eb2c` | On-chain success, no rejection; Circle attestation shows `minFinalityThreshold: "1000"` **silently executed at `finalityThresholdExecuted: "2000"`** |
+| `min_finality_threshold = 2000` | `c31d771418bb1f9e458e9c7f92657732f1923d7630ba7ee11d289d7120bd2f51` | On-chain success; executed at `2000` as requested                                                                                                    |
+
+The real finding here isn't just "both values are accepted" — it's that requesting Fast Transfer
+(`1000`) as a Stellar-source burn produces no error and costs the same as Standard, but is quietly
+re-executed as Standard (`2000`) by Circle's attestation layer, with nothing on-chain signaling
+that the requested behavior didn't happen as asked. That's precisely why the SDK keeps requiring
+callers to state the value explicitly rather than defaulting it: a confirmed-safe value for one
+tested case isn't the same guarantee as a verified unit conversion for every input.
+
+## Structural guarantees, each mapped to a real test
+
+`ARCHITECTURE.md`'s security model doesn't just assert properties — it names the specific test
+that would fail if the property broke. This is the table, reproduced in full:
+
+| Guarantee                                                                                                                          | Where it's enforced                                                                                               | Test                                                                                         |
+| ---------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| A payer's own signature authorizes the exact amount and destination of every leg in a batch, not just "some batch from this payer" | Soroban's own authorization model, bound to the whole `send_cross_chain_batch` invocation                         | `elev_1_batch_authorization_binds_every_legs_amount_and_destination_not_just_payer_identity` |
+| A rail's contract address can never be redirected by a caller                                                                      | `__constructor`-fixed instance storage, no `Address`-typed invocation-target parameter anywhere in the public API | `spoof_1_public_entry_points_have_no_caller_suppliable_contract_address_parameter`           |
+| A `Rail::Usdc` call can't be paired with a LayerZero-shaped destination (or vice versa)                                            | explicit mismatch check in `dispatch_one_leg`                                                                     | `spoof_1_rail_dest_mismatch_is_rejected_not_silently_trusted`                                |
+| A partially-failed batch leaves no partial on-chain effect                                                                         | Soroban's own atomic `invoke_contract` semantics                                                                  | `dos_1_one_leg_impossible_rolls_back_the_whole_batch`                                        |
+| The relayer's spend cap and rate limit are checked against a verified fact, never a caller's claim                                 | amount/recipient are `null` until the `attested` transition writes them from the parsed on-chain message          | relayer's `work/attest.test.ts`                                                              |
+| The widget can never call a wallet's `signTransaction` without first rendering a decoded preview                                   | `confirmPreviewAndSign`'s own parameter type only accepts an already-preview-phase value                          | widget's `index.test.ts`, "preview cannot be bypassed"                                       |
+
+Several of the router's own invariants were closed through actual mutation testing — deliberately
+reintroducing a bug to confirm the suite catches it, not just that it currently passes — including
+one real case where an argument-count-only check initially missed an argument-_shape_ bug. See the
+[router page](/docs/router) for more on what the contract does and doesn't guarantee.
+
+## What's still genuinely open
+
+Disclosed plainly rather than glossed over — these are live gaps in `VERIFIED.md`'s "not yet
+verified" section, not resolved and not assumed in either direction:
+
+- **Inbound USDT0 to a C-address or muxed recipient.** `SendParam.to` is a raw `bytes32`; a G
+  account key and a C contract id are both exactly 32 bytes, and how the Stellar OFT resolves that
+  ambiguity on receive is undocumented by every upstream source checked. The SDK throws
+  `UNSUPPORTED_RECIPIENT_KIND` for C and M inbound recipients rather than guess. Resolving this
+  needs a mainnet operator with USDT0 on an EVM chain and a Stellar smart account to target — the
+  2026-09-11 attempt to run this experiment was BLOCKED on exactly that.
+- **Inbound USDT0 to an account with no trustline.** Stellar's own documentation says this "fails
+  with `op_no_trust`," but whether LayerZero retries delivery once a trustline is added afterward,
+  or the transfer is permanently stuck, is unknown. This also needs a funded mainnet operator; the
+  2026-09-11 attempt was likewise BLOCKED.
+- **The unit of `max_fee` on the Stellar TokenMessengerMinter for any nonzero value.** Every burn
+  observed or run by this project — mainnet or testnet — passed `max_fee = 0`, so whether the
+  contract expects 6-decimal or 7-decimal units for a nonzero cap is still unverified. The adapter
+  converts the caller's amount to 7 decimals, which is the safer direction if it's wrong: a
+  too-large cap can't increase what Circle actually charges, and a too-small one only causes the
+  burn to revert rather than overcharge.
+- **LayerZero Scan's status vocabulary beyond `DELIVERED`.** Only that one status name has been
+  observed; Scan's own documentation page could not be fetched to enumerate the rest. The adapter
+  maps any unrecognized status name to `"submitted"` rather than guessing what it means.
+- **No formal third-party audit yet.** Per `contracts/router/SCOPE.md`, an audit engagement (an SDF
+  Audit Bank engagement) is planned but has not happened. The router's threat-model documentation
+  exists specifically so that engagement can start from a settled threat model rather than
+  reconstructing one from source, but until it actually runs, "backed by a passing test" and
+  "reviewed by an independent third party" remain two different claims — this page only makes the
+  first one.
+
+## Real test counts, verified fresh for this page
+
+Rather than repeat a number from an older document, these counts come from running each package's
+test suite directly, on 2026-09-14:
+
+| Package             | Command                                | Result                      |
+| ------------------- | -------------------------------------- | --------------------------- |
+| `@ferryline/core`   | `pnpm --filter @ferryline/core test`   | 60 tests passing (4 files)  |
+| `@ferryline/sdk`    | `pnpm --filter @ferryline/sdk test`    | 83 tests passing (8 files)  |
+| `ferryline-relayer` | `pnpm --filter ferryline-relayer test` | 98 tests passing (10 files) |
+| `@ferryline/widget` | `pnpm --filter @ferryline/widget test` | 34 tests passing (4 files)  |
+
+That's **275 passing tests**, confirmed fresh, across the four TypeScript packages — matching
+`ARCHITECTURE.md`'s own "275 passing across four TypeScript packages" figure for unit and
+component tests. Two things worth being precise about:
+
+- The relayer's `test` script deliberately excludes its live-database integration tests
+  (`--exclude '**/*.integration.test.ts'`); those 18 tests run against a real, disposable Postgres
+  container and need `docker compose up -d postgres` first (see the [relayer page](/docs/relayer)).
+  They weren't re-run for this page, so treat "98" as the freshly-confirmed unit/component number
+  and the relayer's full count as 98 + 18 documented elsewhere, not independently re-verified here.
+- The router's 29 Soroban/Rust tests (`cargo test`, in its own Cargo workspace) also weren't re-run
+  for this page — this page's test-verification step ran only the four `pnpm` commands above, not
+  `cargo test`. The 29 figure is carried from `ARCHITECTURE.md` and `README.md`, not independently
+  confirmed fresh here.
+
+## Where to go next
+
+[Core Concepts](/docs/core-concepts) explains the three problems (decimals, trustlines, inbound
+delivery) these findings actually shaped, and why `maxFee`/`minFinalityThreshold` still have no
+default even after the confirmations above. The [bridge walkthrough](/docs/bridge-walkthrough)
+runs a full transfer against real testnet infrastructure end to end, with its own real transaction
+hashes. The [relayer](/docs/relayer) and [router](/docs/router) pages go deeper on the two
+components with the most structural security surface. And if any of the open items above look
+like something you could help close — a funded mainnet USDT0 operator, in particular, would
+resolve two of them — see [Contributing](/docs/contributing).

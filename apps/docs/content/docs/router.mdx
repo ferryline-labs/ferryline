@@ -1,0 +1,462 @@
+---
+title: Router
+description: The Soroban contract other contracts call to send USDC or USDT0 cross-chain in one call — its real interface, its testnet address, and the invariants that keep it honest.
+---
+
+## What it is
+
+`ferryline-router` is a Soroban smart contract, written in Rust and compiled to WebAssembly, that
+runs on the Stellar network. (If you've never touched Soroban before: it's Stellar's smart-contract
+platform — a contract there is ordinary Rust, compiled to WASM, that other contracts and off-chain
+clients can call as if it were an on-chain function.) Its whole job is to let another Soroban
+contract — a payroll contract, a vault, an escrow, anything with its own authorization logic — move
+USDC or USDT0 to another chain with a single call, instead of that contract having to integrate with
+Circle's CCTP or LayerZero's OFT contracts directly.
+
+It's deliberately thin. Per `contracts/router/SCOPE.md`, it's "a single-leg cross-chain send for USDC
+(via CCTP) or USDT0 (via LayerZero OFT), authorized by the payer's own `require_auth`, dispatched as a
+thin call into the already-deployed, already-audited-by-their-own-teams TokenMessengerMinter/OFT
+contracts." It never holds funds between legs — each leg's rail contract moves tokens directly from
+the payer — and it supports smart accounts for free: the `payer` parameter is a plain Soroban
+`Address`, and Soroban treats a regular keypair-controlled account and a smart-contract-controlled
+account identically, so the router needs no special-case logic to work with either.
+
+The source lives at `contracts/router`, tested with 29 tests (part of the project's 322 total — see
+the [introduction](/docs) for how that number breaks down across packages), and its own three
+companion documents — `SCOPE.md`, `THREAT_MODEL.md`, and `TESTNET_DEPLOYMENT.md` — are the source of
+everything on this page.
+
+## The current testnet deployment
+
+The router's current testnet contract is:
+
+```
+CASNMFI2CCFNNUF67SPQYACZIIDXLTOQDMTXAR4DSWNEKWZ347SY2LLS
+```
+
+This is stated unambiguously as current because it's cross-checked against `ARCHITECTURE.md`'s own
+"Deployment status" table, which lists this exact address as the router's **"Current contract."**
+Trust that table, and this page — not a raw grep of `contracts/router/TESTNET_DEPLOYMENT.md`. That
+file is written in chronological, append-only order, as a running lab notebook of every deployment
+attempt, and it contains **three earlier, superseded contract addresses**, none of them marked
+"deprecated" inline. Only the surrounding prose (which fix each one preceded or followed) tells you
+which is current, so a search for a contract-ID-shaped string in that file can just as easily surface
+a dead address as the live one. In order of appearance:
+
+1. `CADZV6S7CADVQFYH4FU3JTWVTRKL6VN474ZX637UVKHP36GUGIKY2QHI` — deployed after the STEP 4 fix (correct
+   CCTP/OFT argument shapes) but before the STEP 5 fix below it. This is the deployment that first hit
+   CCTP's real `HookDataEmpty` error.
+2. `CACNV466XMCEQSE73FJN646KWYD54C3ZRDXZUZJM3EH7736YHWTKZSMP` — deployed after switching to plain
+   `deposit_for_burn`, but before the ledger-rounding fix described below. This is the build behind the
+   two real `"Unauthorized function call for address"` submission failures.
+3. `CDOPZ3QMSKYFKYAMWNLG6KPQECRGOJSYE3QCAO53JJSCRCFYCMFO7P2N` — deployed with that ledger-rounding fix.
+   This is the contract behind the project's first genuinely completed `send_cross_chain`, tx
+   `5f91eb68a75f0a1bbcaded62d4dc2af37ccea795c984fae8c66eb9fdaace33b0` — real, and `successful: true` —
+   but it was superseded again by the batch-authorization fix below before any batch call could be
+   proven.
+
+The current address, `CASNMFI2CCFNNUF67SPQYACZIIDXLTOQDMTXAR4DSWNEKWZ347SY2LLS`, is the one with the
+batch-authorization fix, and it's the contract behind the project's first genuinely completed
+`send_cross_chain_batch`, tx `1ad2aeb076450b7d9d08732e5b80d58c3c70c3a0ca6cc0e79e2e375c7212381d` — a
+real, two-leg batch, both legs completed, `successful: true`. (Worth being precise here, since
+`ARCHITECTURE.md`'s own deployment table lists both the single-leg and batch tx hashes under the same
+"Current contract" row without spelling this part out: the single-leg send above ran against the
+_previous_ address, `CDOPZ3QMSKY...`, before that contract was superseded. The current address's own
+proof is the batch send.)
+
+You can query the current contract's real interface directly, without trusting anything written here:
+`stellar contract info interface --network testnet --id CASNMFI2CCFNNUF67SPQYACZIIDXLTOQDMTXAR4DSWNEKWZ347SY2LLS`.
+
+## The public interface
+
+Every function the router exposes:
+
+| Function                 | Parameters                                                                               | Returns                           | What it does                                                                                                 |
+| ------------------------ | ---------------------------------------------------------------------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `__constructor`          | `usdc_contract: Address, usdt0_contract: Address, usdc_sac: Address, usdt0_sac: Address` | —                                 | Runs exactly once, at deployment. Stores the four addresses this router will ever call.                      |
+| `version`                | —                                                                                        | `u32`                             | Returns `INTERFACE_VERSION` (currently `1`), bumped on every incompatible change to this interface.          |
+| `send_cross_chain`       | `payer: Address, rail: Rail, dest: Dest, amount: i128`                                   | —                                 | A single-leg send: burns `amount` of USDC via CCTP, or sends it via the USDT0 OFT.                           |
+| `send_cross_chain_batch` | `payer: Address, legs: Vec<(Rail, Dest, i128)>`                                          | —                                 | Several legs (potentially different rails and destinations) in one transaction, all-or-nothing.              |
+| `volume`                 | `rail: Rail`                                                                             | `i128`                            | Cumulative amount moved through that rail so far, in that rail's own native units.                           |
+| `pack_destination`       | `raw: Bytes`                                                                             | `Result<BytesN<32>, RouterError>` | Validates that `raw` is exactly 32 bytes and returns it as a fixed-size `BytesN<32>`; rejects anything else. |
+
+Two Soroban types worth naming since they show up throughout: `Bytes` is a variable-length byte
+buffer; `BytesN<32>` is Soroban's fixed-size, exactly-32-byte buffer type — the shape every rail
+contract's recipient field actually expects. `i128` is a 128-bit signed integer, used for token
+amounts so they can't silently overflow.
+
+### `Rail` and `Dest`
+
+`Rail` just names which already-deployed rail contract a call should go to:
+
+```rust
+pub enum Rail {
+    Usdc,
+    Usdt0,
+}
+```
+
+`Dest` carries everything that specific rail's call needs beyond the shared `payer`/`amount`:
+
+```rust
+pub enum Dest {
+    /// CCTP: (destination_domain, mint_recipient, max_fee, min_finality_threshold).
+    Cctp(u32, BytesN<32>, i128, u32),
+    /// LayerZero: (destination_eid, to, refund_address).
+    LayerZero(u32, BytesN<32>, Address),
+}
+```
+
+For `Dest::Cctp`: `destination_domain` is Circle's numeric ID for the destination chain; `mint_recipient`
+is the 32-byte-encoded address that receives the minted USDC there; `max_fee` and
+`min_finality_threshold` are CCTP's own fee/finality parameters. For `Dest::LayerZero`: `destination_eid`
+is LayerZero's numeric endpoint ID for the destination chain; `to` is the 32-byte-encoded recipient;
+`refund_address` is a Stellar address that receives any unused native fee back.
+
+`max_fee`, `min_finality_threshold`, and `refund_address` are deliberately caller-supplied fields, not
+router-chosen constants — the same reasoning [Core Concepts](/docs/core-concepts#why-maxfee-and-minfinalitythreshold-have-no-default)
+covers for the SDK's own CCTP adapter applies here, verbatim from `Dest`'s own doc comment in
+`lib.rs`:
+
+> `max_fee` and `min_finality_threshold` are deliberately caller-supplied, not router-chosen constants
+> ... Stellar's TokenMessengerMinter's exact unit/threshold behavior for these two fields is
+> UNVERIFIED end-to-end, so shipping a default here would repeat this exact bug class one level up (an
+> assumed value standing in for a verified one) rather than fix it. `refund_address` is similarly
+> caller-supplied for LayerZero: there is no universal correct refund destination, only the one this
+> specific payer wants.
+
+Notice `Dest::Cctp` has no `destination_caller` field, even though CCTP's real call takes one. That
+value — thirty-two zero bytes, Circle's own documented convention meaning "any address may complete
+the mint" — is fixed internally as a constant (`CCTP_DESTINATION_CALLER_NONE`) rather than plumbed
+through as a parameter, precisely because it has no genuine per-call variation the way `max_fee` does.
+
+### `RouterError`, and a stale comment worth knowing about
+
+The contract defines exactly one error variant:
+
+```rust
+#[contracterror]
+#[derive(Clone, Debug, Eq, PartialEq, Copy)]
+#[repr(u32)]
+pub enum RouterError {
+    /// `pack_destination` was given something other than exactly 32 bytes — rejected, never
+    /// silently truncated or zero-padded (THREAT_MODEL.md, Info.1).
+    InvalidDestinationLength = 1,
+}
+```
+
+That's it — one variant, returned only by `pack_destination`. There's a stale comment elsewhere in
+`lib.rs` worth flagging so it doesn't mislead anyone reading the source directly: the internal
+`dispatch_one_leg` function checks that a call's `rail` argument actually agrees with its `dest`
+argument (you can't pass `Rail::Usdc` together with a `Dest::LayerZero(...)`), and the comment above
+that check reads "see `RouterError::RailDestMismatch`'s own doc comment for why..." — but no such
+variant exists anywhere in the real `RouterError` enum above. The actual mismatch handling is a plain
+Rust `panic!`, not a typed, catchable contract error:
+
+```rust
+if *rail != dest_rail {
+    panic!("rail/dest mismatch: {:?} does not match {:?}", rail, dest);
+}
+```
+
+A panic still aborts and rolls back the whole transaction — it's not unsafe — but a caller can't catch
+it the way it could catch a `Result<_, RouterError>`. Don't go looking for a `RailDestMismatch` error
+type; it isn't real, just a name the comment invented and never wired up.
+
+## The invariants
+
+Before the specifics, one Soroban concept the rest of this section leans on: `payer.require_auth()`
+is Soroban's core permission check. Calling it tells the platform "prove that whoever is submitting
+this transaction actually authorized `payer` for this exact invocation" — a real signature, if
+`payer` is a plain keypair account, or a call into that address's own custom authorization contract
+code, if it's a smart account. If no valid authorization covers the call, execution aborts. Crucially,
+Soroban's own documentation is explicit that this binding is the contract author's job, not something
+the platform enforces automatically beyond matching the invocation itself — nothing stops a poorly
+written contract from checking authorization for one set of values and then acting on a different
+one.
+
+### 1. One `require_auth()` call covers an entire batch, not one call per leg
+
+`send_cross_chain_batch` calls `payer.require_auth()` exactly once, before dispatching any leg — not
+once inside the loop, per leg:
+
+```rust
+pub fn send_cross_chain_batch(env: Env, payer: Address, legs: Vec<(Rail, Dest, i128)>) {
+    payer.require_auth();
+    for (rail, dest, amount) in legs.iter() {
+        Self::dispatch_one_leg(&env, &payer, &rail, &dest, amount);
+    }
+}
+```
+
+This looks almost too simple, and the "obvious" alternative — call `require_auth()` once per leg
+inside the loop, so each leg gets its own authorization — was in fact the _original_ design, and it
+was genuinely wrong, discovered by a real testnet failure. Soroban's `require_auth()` binds to the
+**current stack frame's own invocation** — this function's own address, name, and full argument
+list (the entire `legs` vector) — and every iteration of a flat loop runs inside the same frame. So
+calling it N times for an N-leg batch never produced N distinct authorizations; every single call
+authorized the exact same thing (the whole batch), and the second call onward just asked the host to
+re-confirm an authorization it had already granted. On real testnet, the second call in the loop
+failed at simulation with `"frame is already authorized"`. `THREAT_MODEL.md` states the corrected
+understanding plainly:
+
+> Soroban's authorization model binds `require_auth()`'s `AuthorizedFunction` to the CURRENT STACK
+> FRAME's own invocation — this function's own address, name, and full arguments (the whole `legs`
+> vector) — regardless of how many times it is called from inside that same frame. There was never
+> real, distinct per-leg authorization available in this design ... Calling it once, here, is the
+> correct realization of what this mechanism always actually provided.
+
+The fix (calling `require_auth()` once, before the loop) was proven, not just asserted, by an
+adversarial test that mocks a real authorization for a specific two-leg batch and then tries to
+submit a _different_ batch — one leg's amount altered after the mock was built — through that same
+signature, confirming it's rejected. That one signature genuinely does bind every leg's own amount
+and destination, not merely the payer's identity.
+
+### 2. Batches are all-or-nothing
+
+If any leg in a batch fails, the entire transaction reverts — including every leg that already
+executed earlier in the same call. This isn't a limitation the router chose to accept; per
+`SCOPE.md`, it's simply what the platform already does by default:
+
+> **Batch payouts are all-or-nothing for v1**: if any leg's underlying rail call fails, the entire
+> batch transaction reverts, including every already-attempted leg in that same call. This is not an
+> oversight or a temporary limitation waiting on more engineering time to remove — it is v1's chosen
+> semantics, and it is also the **platform's own default behavior** for Soroban cross-contract calls
+> (see `THREAT_MODEL.md`'s Dos.1 ...).
+
+The mechanism: Soroban's `env.invoke_contract` — the way one contract calls another — panics (traps)
+if the callee fails, and an uncaught trap rolls back everything the whole transaction did. A contract
+can opt _out_ of that by using `env.try_invoke_contract` instead, which returns a `Result` so one
+leg's failure can be handled without aborting the rest — but that's a deliberate choice a contract
+author has to make. The router never makes it. A private helper wraps every rail call specifically so
+this stays true by construction, not by convention:
+
+```rust
+fn atomic_invoke<T: TryFromVal<Env, Val>>(
+    env: &Env,
+    contract: &Address,
+    func: &str,
+    args: Vec<Val>,
+) -> T {
+    env.invoke_contract(contract, &Symbol::new(env, func), args)
+}
+```
+
+Its own doc comment explains why it exists as a named function rather than just inline code: "this
+ALWAYS uses `env.invoke_contract` (the platform's default, panic-on-failure path), NEVER
+`env.try_invoke_contract`. A reviewer adding a new call site that reaches for `try_invoke_contract`
+... has to bypass this function by name to do it." A real testnet rollback confirms the behavior
+directly: a genuine two-leg batch with one deliberately bad leg (an invalid CCTP domain) had its first
+leg's entire real call chain — approve, transfer, burn, message dispatch — completed successfully,
+then the second leg trapped, and the router's own volume counter and the payer's real balance were
+both confirmed unchanged afterward. Nothing from leg one survived.
+
+### 3. The `approve_live_until_ledger` bug: no live-ledger value inside an authorized call
+
+This is the most interesting bug this project has hit, and it's worth telling in full because the
+failure mode is subtle and specific to how Soroban transactions are built.
+
+Both CCTP and the OFT need the router to `approve` them to move the payer's tokens before the actual
+burn/send call. That `approve` call takes a `live_until_ledger` argument: how long the approval stays
+valid, expressed as a ledger sequence number. The original code computed this the obvious way —
+`env.ledger().sequence() + APPROVE_LEDGER_WINDOW`, evaluated fresh, every single time the function
+ran. That included two separate moments: once when `stellar-cli` **simulates** the transaction (to
+build the authorization signature and figure out resource costs), and again, seconds later, when the
+transaction is actually **applied** on-chain. On Stellar testnet, a ledger closes roughly every five
+seconds — long enough for the live ledger sequence to have moved between those two moments, ordinary
+behavior, not an edge case.
+
+Because `approve` is a sub-invocation inside `payer`'s authorized call tree, Soroban requires the
+_real_ call's full arguments to exactly match what was signed. If `live_until_ledger` drifted between
+simulate-time and apply-time, the real submitted call's arguments no longer matched anything in the
+signed tree — and the host reported `"Unauthorized function call for address"`. Not a bad signature;
+an absence of any matching node to compare against. This is exactly what happened, twice, on real
+testnet submissions (tx `472de592cf5dc40560cfee6d8f103437e04c1df959e3efb236a4d3ccafbd7025` and
+`728576f1b5ff4d20c0c4e8b16693bef2469ef8b2212759d2fd036a44796aad94`), even though a real
+non-submitting _simulation_ of the identical call succeeded completely, and even though a real,
+single-hop `approve` from the same account worked fine in isolation. The root cause was confirmed by
+reading the pinned host implementation's own source directly (`soroban-env-host` 27.0.1's
+`src/auth.rs`), not guessed at.
+
+The fix rounds the ledger sequence down to a coarse bucket before adding the validity window, so
+simulate-time and apply-time land on the identical number as long as they fall in the same bucket —
+comfortably true for any realistic few-second submission delay:
+
+```rust
+fn approve_live_until_ledger(env: &Env) -> u32 {
+    let current = env.ledger().sequence();
+    let rounded_down = (current / APPROVE_LEDGER_ROUNDING_WINDOW) * APPROVE_LEDGER_ROUNDING_WINDOW;
+    rounded_down + APPROVE_LEDGER_WINDOW
+}
+```
+
+This produced a standing design rule for the whole contract, stated directly in `THREAT_MODEL.md`:
+
+> Any argument that is part of a `require_auth`-covered invocation ... must be **stable across a
+> realistic simulate-to-apply time gap**. Concretely: never compute such an argument as a raw
+> function of live, unrounded, time-dependent host state.
+
+And the fix was confirmed, not just reasoned about — the same call that had failed twice completed
+for real after the fix, tx `5f91eb68a75f0a1bbcaded62d4dc2af37ccea795c984fae8c66eb9fdaace33b0`,
+`successful: true`, with the router's own `volume(Usdc)` counter and the payer's real USDC balance
+both updated exactly as expected. It's the project's first genuinely completed `send_cross_chain` on
+any network.
+
+### 4. Destination bytes are rejected, never silently truncated or padded
+
+Every rail's recipient field is a fixed 32-byte value. `pack_destination` is the router's one real
+piece of validation logic, and its whole job is refusing to guess when a caller hands it the wrong
+number of bytes:
+
+```rust
+pub fn pack_destination(env: Env, raw: Bytes) -> Result<BytesN<32>, RouterError> {
+    if raw.len() != 32 {
+        return Err(RouterError::InvalidDestinationLength);
+    }
+    let mut array = [0u8; 32];
+    raw.copy_into_slice(&mut array);
+    Ok(BytesN::from_array(&env, &array))
+}
+```
+
+The concern this closes is concrete, not theoretical: if a malformed destination were silently
+zero-padded or truncated instead of rejected, funds could be sent to an address that merely shares a
+byte prefix with the intended one — a real, previously-seen bug class in this project, per
+`THREAT_MODEL.md`'s Info.1 entry, which points at "the phase-3 nonce-length validation fix in
+`@ferryline/sdk`" as the prior instance. This function is also property-tested against 256 generated
+inputs of varying, mostly-wrong lengths, not just a couple of hand-picked examples.
+
+### 5. Rail contract addresses are fixed at construction, never caller-suppliable
+
+The addresses of the actual CCTP and OFT contracts the router calls are set exactly once, in
+`__constructor`, and never again:
+
+```rust
+pub fn __constructor(
+    env: Env,
+    usdc_contract: Address,
+    usdt0_contract: Address,
+    usdc_sac: Address,
+    usdt0_sac: Address,
+) {
+    env.storage().instance().set(&DataKey::UsdcContract, &usdc_contract);
+    env.storage().instance().set(&DataKey::Usdt0Contract, &usdt0_contract);
+    env.storage().instance().set(&DataKey::UsdcSac, &usdc_sac);
+    env.storage().instance().set(&DataKey::Usdt0Sac, &usdt0_sac);
+}
+```
+
+Its own doc comment states the guarantee directly: "this is the ONLY place these addresses are ever
+set — no other function can change them, and no `send_cross_chain`/batch call ever takes a contract
+address as an argument." This closes off a spoofing scenario the threat model names as `Spoof.1`: if
+a caller could supply their own contract address as an invocation target, they could make the router
+call an arbitrary contract while claiming "this went through the real CCTP/LayerZero path." Neither
+public entry point has any `Address`-typed parameter used as a call target — `payer` is a data value,
+not something the router invokes — and this is checked by a structural test, not just read as true
+from the source.
+
+## What v1 deliberately does not do
+
+`SCOPE.md` calls out several absences explicitly, "written for an auditor or integrator who should
+not have to guess at intent from what is merely absent." Three worth knowing before you rely on this
+contract:
+
+**No upgrade mechanism.** No admin-gated `upgrade()` function, no proxy pattern — this router's
+bytecode, once deployed, cannot be changed in place.
+
+> **This is a deliberate choice, not an oversight.** ... an upgradable contract that moves other
+> people's funds is a categorically larger attack surface — an upgrade mechanism is itself a
+> privileged code path that, if compromised, bypasses every other safety property in this document
+> regardless of how well `send_cross_chain` itself is written.
+
+A future protocol change ships as a new, separately-deployed contract with its own address, not a
+mutation of this one.
+
+**No admin override or pause switch.** Nobody — including the Ferryline team — can halt or reverse an
+in-flight send once it's submitted.
+
+> **Also a deliberate choice, stated explicitly here rather than left to be discovered as an
+> absence.** v1 has no admin address, no pause function, no denylist, and no way for anyone
+> (including the Ferryline team) to halt or reverse an in-flight `send_cross_chain`/batch call once
+> submitted.
+
+The reasoning is the same as for upgradability: a pause mechanism is itself a privileged code path,
+and the rail contracts underneath (which do have pause/admin machinery of their own, being Circle's
+and LayerZero's) are where operational control already lives.
+
+**No per-transfer event emission (yet).** `SCOPE.md` frames this as "no per-transfer on-chain
+history" — the router's only on-chain record of activity is the aggregate `volume()` counters, one
+per rail, not a queryable log of individual transfers:
+
+> Per `THREAT_MODEL.md`'s Dos.2, the volume footprint is a small set of aggregate counters, not a
+> queryable log of individual transfers. An integrator or auditor who needs a full transfer history
+> should use the router's emitted events ... combined with off-chain indexing.
+
+Worth disclosing plainly here rather than smoothing over: that sentence refers forward to events that,
+per `THREAT_MODEL.md`'s own Repud.1 entry, **do not exist yet** — "No event emission exists yet;
+`send_cross_chain`/`send_cross_chain_batch` return `()`." It's confirmed real, scheduled future work,
+not something silently dropped, and it doesn't weaken anything already implemented (authorization,
+atomicity, and bounded storage are all independent of it) — but today, there is no on-chain,
+per-transfer record at all, aggregate or otherwise, beyond the two rail-level totals `volume()`
+exposes.
+
+## The two rails are not equally proven
+
+It's easy to read "CCTP and LayerZero are both supported" and assume both are equally real. They are
+not, and this project is explicit about the gap rather than letting it blur.
+
+**CCTP/USDC is real, tx-hash-verified, end to end.** The current contract's real batch send
+(`1ad2aeb076450b7d9d08732e5b80d58c3c70c3a0ca6cc0e79e2e375c7212381d`) and the previous contract's real
+single-leg send (`5f91eb68a75f0a1bbcaded62d4dc2af37ccea795c984fae8c66eb9fdaace33b0`) both moved real
+testnet USDC through the real, deployed CCTP TokenMessengerMinter, confirmed via direct Horizon
+queries and real balance changes on the `demo-payer` account.
+
+**USDT0/LayerZero has never been exercised end to end, on any network.** There is no Stellar testnet
+OFT deployment at all — `TESTNET_DEPLOYMENT.md`'s own deployment record shows the constructor's
+`Usdt0Contract`/`Usdt0Sac` slots wired to the same address, `CBOWOLFSDM5PZXNFIVDMP5NZ7U2GSIHED6H6R446QOHF266XINKUMMF6`,
+labeled there as a "documented mainnet-OFT stand-in," purely so the constructor has something to point
+at on testnet. `TESTNET_DEPLOYMENT.md` states the underlying limitation directly:
+
+> USDT0 still has no Stellar testnet deployment, so this leg cannot be exercised on testnet regardless
+> of §4.3's finding. The router's OFT call-building code ... was verified correct against the real
+> interface via `interface_conformance.rs`'s struct-shape checks and mutation testing, but ... has not
+> been confirmed to complete a real, successful, submitted transaction, since no real testnet OFT
+> exists to submit one against.
+
+That's the honest state of it: the OFT call-building code is verified _shape-correct_ against a real
+mainnet interface dump, the same rigor applied to the CCTP arm — but "builds the right call" and
+"has actually completed a transfer" are different claims, and only the CCTP path can currently make
+the second one. If you're evaluating this router for a USDT0 integration, treat that path as
+unverified in practice, not merely untested in theory. See [Core Concepts](/docs/core-concepts#the-two-rails)
+for the same distinction as it applies to the SDK's own adapters.
+
+## Gaps and open questions, disclosed plainly
+
+- **No formal audit yet.** Per `SCOPE.md`, an Audit Bank engagement is planned but hasn't happened;
+  `THREAT_MODEL.md` exists specifically so that engagement starts from a settled threat model instead
+  of one reconstructed from source during the audit itself.
+- **Isolated-per-leg batches are out of scope for v1**, not merely unbuilt — `SCOPE.md` is explicit
+  that a naive `try_invoke_contract`-based version wouldn't give true isolation anyway, since
+  resource-limit and internal host errors trap uncatchably regardless of `try_`/non-`try_` choice, so
+  this needs its own design pass, not a quick swap. That this is even a relevant question is itself
+  downstream of Invariant 1: since no genuine _per-leg_ authorization ever existed on this platform in
+  the way the router originally assumed, a future isolated-per-leg design would need its own
+  authorization story, not just a swap to `try_invoke_contract`.
+- **No generic "any rail" extensibility.** The router deliberately supports exactly two rails; adding
+  a third is a new, separately reviewed router version, not a runtime configuration change.
+- **`send_cross_chain_batch` has one real completed transaction to its name**, and the
+  deliberate-failure rollback case that proves atomicity produced no transaction hash of its own — a
+  content-level failure (a bad domain, insufficient balance) traps at _simulation_, before Soroban
+  ever builds a submittable, fee-bearing transaction. That's confirmed as a platform fact, not a gap
+  in the investigation, but it does mean you won't find a rollback tx hash to independently verify —
+  only the before/after state confirmation `TESTNET_DEPLOYMENT.md` records.
+
+## Where to go next
+
+[Core Concepts](/docs/core-concepts) covers the same two rails from the SDK's side — useful context
+for why fields like `max_fee` and `refund_address` are caller-supplied here too. [Security &
+Verification](/docs/security) is where this project's broader verification discipline (what's
+confirmed, what's assumed, what's still open) is explained in full. If you're integrating the router
+directly from another Soroban contract rather than through the SDK, `contracts/router/THREAT_MODEL.md`
+and `contracts/router/SCOPE.md` are worth reading in full — this page summarizes them but leaves out
+some of the STRIDE-table detail and the full mutation-testing record.

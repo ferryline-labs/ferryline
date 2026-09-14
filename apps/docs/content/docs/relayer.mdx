@@ -1,0 +1,359 @@
+---
+title: Relayer
+description: The self-hosted service that completes inbound EVM→Stellar CCTP transfers — Docker Compose setup, environment variables, and the three HTTP endpoints.
+---
+
+`ferryline-relayer` (`packages/relayer`) is a self-hosted Node service that completes **inbound**
+CCTP transfers — USDC moving from an EVM chain to Stellar. It watches the source burn transaction,
+polls Circle's Iris for the attestation, and once the message is verified, builds and pays for the
+`mint_and_forward` call on Stellar itself, fee-bumping it from its own sponsor account so the
+recipient never needs XLM to receive the transfer. As its own README puts it:
+
+> Completes CCTP-to-Stellar transfers on the sender's behalf: watches Circle's Iris for
+> attestation, builds and sponsors the `mint_and_forward` call, and confirms delivery.
+
+This exists because CCTP itself has no automatic delivery on Stellar — see
+[Core Concepts](/docs/core-concepts#three-problems-solved-once) for why an API consumer has to
+submit the attestation onchain themselves. The relayer is that submitter, running continuously so
+nobody else has to.
+
+## What it doesn't do
+
+The relayer only ever drives the `pending → attested → submitting → delivered` path for CCTP
+transfers whose source chain is an EVM chain. It does not touch **outbound** (Stellar→EVM)
+transfers at all. [Core Concepts](/docs/core-concepts#three-problems-solved-once) says this
+plainly:
+
+> For **outbound** (Stellar→EVM) transfers, there is currently no equivalent automatic relay in
+> this project at all — the destination-chain `receiveMessage` call has to be submitted by the
+> sender, the recipient, or their own infrastructure.
+
+If you're sending Stellar→EVM, that submission is on you (or your own infrastructure) via the
+[Router](/docs/router) contract directly — there's no relayer-side help for that direction today.
+The relayer's own `SUPPORTED_RAILS` (in `src/http/schemas.ts`) is `["usdc-cctp"]` only, with a
+one-line reason attached: `usdt0-layerzero` never needs a relayer, because "LayerZero's own
+executor delivers it."
+
+## The security property: amount and recipient are never trusted from the caller
+
+`POST /transfers` accepts exactly four fields: `transferId`, `sourceChain`, `sourceTxHash`, and
+`rail` — which source transaction to watch, nothing about what it's worth or who receives it. This
+is a deliberate design decision, called out explicitly in both the README and the request schema
+itself. From the README:
+
+> The transfer's actual `amount` and `recipient` are extracted only once the transfer reaches
+> `attested`, from the independently-parsed and verified on-chain CCTP message and its forwarder
+> hook data. They are `null` on the row until that transition writes them. If a caller could
+> register a transfer claiming a recipient or amount that doesn't match what actually happened
+> on-chain, the relayer's spend cap and per-recipient rate-limit decisions could be made against a
+> fabricated fact instead of a verified one.
+
+And the schema itself, `registerTransferBodySchema` in `src/http/schemas.ts`, carries the same
+warning as a code comment aimed at future editors:
+
+> SECURITY PROPERTY, not an oversight — do not "simplify" this by adding `amount`/`recipient` here
+> as a convenience: this schema deliberately accepts ONLY which source transaction to watch.
+
+Practically, this means `GET /transfers/:id` reports `amount: null` and `recipient: null` for any
+transfer still in `pending` — both fields populate only once the row reaches `attested`.
+
+## Two rate limits — don't conflate them
+
+Because the recipient genuinely isn't known at registration time, the relayer enforces two
+separate limits, checked at two different points, and only one of them is a per-recipient control:
+
+- **Registration-time, per API key** (`FERRYLINE_REGISTRATION_LIMIT_MAX_ATTEMPTS` /
+  `FERRYLINE_REGISTRATION_LIMIT_WINDOW_MS`, default 60 attempts / 60 seconds — see
+  `src/spend/registration-limit.ts`). Checked on every `POST /transfers` call, before the
+  recipient exists. The README is explicit that this is a blunt instrument: it "has no idea who
+  the money is going to, only which API key made the call" — its job is stopping one caller from
+  flooding the relayer with junk registrations, and a 429 here is **not** evidence about any
+  specific recipient.
+- **At the `pending → attested` transition, per recipient**
+  (`FERRYLINE_MAX_TRANSFERS_PER_RECIPIENT` / `FERRYLINE_RECIPIENT_RATE_LIMIT_WINDOW_MS`, no
+  default — required). This is the real per-recipient limit, checked only once the recipient is
+  verified from the on-chain message. A recipient over this limit gets a terminal
+  `errorCode: "RECIPIENT_RATE_LIMITED"` on that transfer's row, distinct from every other failure
+  reason — check `GET /transfers/:id`, not the registration response, to see it.
+
+## Self-hosting with Docker Compose
+
+The relayer ships a `docker-compose.yml` with two services — `relayer` and `postgres` — matching
+the project's self-hostable design. Everything below runs from `packages/relayer/`:
+
+```sh
+cp .env.example .env
+# edit .env: at minimum set POSTGRES_PASSWORD, FERRYLINE_STELLAR_RPC_URL, FERRYLINE_SPONSOR_SECRET,
+# and the four spend-related variables from the table below.
+docker compose up -d --build
+```
+
+The build context is the **repository root**, not `packages/relayer/` — the Dockerfile needs
+`packages/core`, `packages/sdk`, and `packages/relayer` copied in together — but `docker-compose.yml`
+already points at that context correctly, so you don't need to `cd` anywhere else. Postgres reports
+healthy via `pg_isready` before the `relayer` service starts, so a fresh `up` never races the
+database being ready. `postgres:17-alpine` and `node:24-alpine` are the exact base images in use.
+
+Check it came up:
+
+```sh
+curl http://localhost:8080/healthz
+```
+
+```json
+{
+  "status": "ok",
+  "service": "ferryline-relayer",
+  "version": "0.0.0",
+  "uptimeSeconds": 12,
+  "now": "2026-01-01T00:00:00.000Z",
+  "sponsor": { "account": "G...", "nativeBalanceStroops": null, "balanceUnknown": true },
+  "dailySpend": { "spentStroops": "0", "ceilingStroops": "1000000000", "ceilingReached": false }
+}
+```
+
+`balanceUnknown: true` just means the sponsor account isn't funded yet on the configured network —
+not an error in the relayer itself.
+
+### Bootstrapping your first API key
+
+There is no admin endpoint or CLI for creating API keys yet — `POST /transfers` checks a bearer
+token against the `api_keys` table's `key_hash` column directly, so the only way to create one
+today is to insert the SHA-256 hash yourself:
+
+```sh
+docker compose exec postgres psql -U ferryline -d ferryline -c \
+  "INSERT INTO api_keys (key_hash, label) VALUES ('$(echo -n 'your-test-key' | sha256sum | cut -d' ' -f1)', 'local-test');"
+```
+
+Replace `your-test-key` with a real, private value of your own before using this anywhere beyond
+local testing. With a key in place, register a real CCTP burn you've already submitted on a
+supported testnet source chain (`ethereum-sepolia`, `arbitrum-sepolia`, `base-sepolia`, or
+`polygon-amoy` — see `@ferryline/sdk`'s `CCTP_EVM_CHAINS` for the current list):
+
+```sh
+curl -X POST http://localhost:8080/transfers \
+  -H "Authorization: Bearer your-test-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "transferId": "<a real ULID — see @ferryline/core newTransferId()>",
+    "sourceChain": "ethereum-sepolia",
+    "sourceTxHash": "<the real 0x-prefixed 32-byte deposit_for_burn transaction hash>",
+    "rail": "usdc-cctp"
+  }'
+```
+
+A successful registration returns `201` with `status: "pending"`. Poll `GET /transfers/:id` to
+watch it progress: `pending` (waiting on Iris) → `attested` (message verified, `amount`/`recipient`
+now populated) → `submitting` (fee-bump broadcast) → `delivered`.
+
+## Environment variables
+
+`src/config.ts` and `src/spend/config.ts` load exactly 15 environment variables between them.
+`config.ts`'s own doc comment draws the line precisely:
+
+> Kept separate from `spend/config.ts`'s `SpendConfig`, which has its own stricter "no defaults,
+> ever" rule for money-related values — these values are allowed sensible defaults (a poll
+> interval, a port) because getting them wrong is inconvenient, not unsafe.
+
+**Required, no default at all — the relayer refuses to start without these (`config.ts`):**
+
+| Variable                    | Purpose                                                         |
+| --------------------------- | --------------------------------------------------------------- |
+| `FERRYLINE_NETWORK`         | `"mainnet"` or `"testnet"` — which CCTP network to run against. |
+| `DATABASE_URL`              | A Postgres connection string.                                   |
+| `FERRYLINE_STELLAR_RPC_URL` | The Soroban RPC endpoint to use.                                |
+
+**Required, no default — spend-related (`spend/config.ts`):** these control real money movement,
+so `loadSpendConfig` throws rather than falling back to anything if any of them is unset, empty,
+whitespace-only, zero, negative, or non-numeric.
+
+| Variable                                   | Purpose                                                                                |
+| ------------------------------------------ | -------------------------------------------------------------------------------------- |
+| `FERRYLINE_MAX_FEE_BUMP_STROOPS`           | Max XLM stroops fee-bumped for a single `mint_and_forward`.                            |
+| `FERRYLINE_DAILY_SPEND_CEILING_STROOPS`    | Max total confirmed XLM stroops fee-bumped per UTC calendar day, across all transfers. |
+| `FERRYLINE_MAX_TRANSFERS_PER_RECIPIENT`    | The real per-recipient rate limit's threshold (see above).                             |
+| `FERRYLINE_RECIPIENT_RATE_LIMIT_WINDOW_MS` | That limit's rolling window, in milliseconds.                                          |
+
+**Optional — allowed sensible defaults, because getting these wrong is a performance/load
+inconvenience, not a money-safety issue (`config.ts`):**
+
+| Variable                                    | Default   | Purpose                                                                   |
+| ------------------------------------------- | --------- | ------------------------------------------------------------------------- |
+| `HOST`                                      | `0.0.0.0` | Address the HTTP server binds to.                                         |
+| `PORT`                                      | `8080`    | Port the HTTP server listens on.                                          |
+| `FERRYLINE_POLL_INTERVAL_MS`                | `2000`    | Initial backoff delay when a work-loop phase finds nothing to do.         |
+| `FERRYLINE_POLL_MAX_INTERVAL_MS`            | `30000`   | Ceiling that backoff delay is clamped to.                                 |
+| `FERRYLINE_MAX_CONCURRENT_TRANSFERS`        | `20`      | Max transfers driven concurrently, combined across both work-loop phases. |
+| `FERRYLINE_REGISTRATION_LIMIT_MAX_ATTEMPTS` | `60`      | The registration-time (per-API-key) spam brake's threshold — see above.   |
+| `FERRYLINE_REGISTRATION_LIMIT_WINDOW_MS`    | `60000`   | That same brake's rolling window, in milliseconds.                        |
+| `FERRYLINE_RELAYER_VERSION`                 | `0.0.0`   | Reported verbatim in `GET /healthz`'s `version` field.                    |
+
+That's all 15. Two more variables matter for self-hosting but live outside these two files:
+
+- **`FERRYLINE_SPONSOR_SECRET`** — required, no default, loaded in `src/signer/env-secret-signer.ts`
+  rather than either config file. It's the sponsor account's Stellar secret seed (`S...`); every
+  `mint_and_forward` fee-bump is signed and paid for by this account. The README is blunt about it:
+  "Never a default, never a silently-generated throwaway key." Never commit this value.
+- **`POSTGRES_PASSWORD`** (Docker Compose only, required) and **`POSTGRES_HOST_PORT`** (Docker
+  Compose only, default `5432`) — read directly by `docker-compose.yml`, not by the relayer's own
+  Node process. `POSTGRES_PASSWORD` is shared between the `postgres` and `relayer` services in the
+  compose file's `DATABASE_URL` interpolation — don't set it independently in two places.
+
+## The HTTP API
+
+Three routes total, registered in `src/http/app.ts`. Every route's request/response shape is a zod
+schema, wired as both Fastify's validator _and_ serializer compiler — so a malformed request is
+rejected with `400` before the handler ever touches the database or a chain call, and the app's
+global error handler catches any zod validation failure it misses:
+
+```ts
+app.setErrorHandler((error, request, reply) => {
+  if (hasZodFastifySchemaValidationErrors(error)) {
+    reply.code(400).send({
+      error: "request validation failed",
+      details: error.validation.map((v) => ({
+        path: v.instancePath || v.schemaPath,
+        message: v.message,
+      })),
+    });
+    return;
+  }
+  request.log.error(error);
+  reply.code(500).send({ error: "internal error" });
+});
+```
+
+Anything else unhandled becomes a `500` with `{ "error": "internal error" }`.
+
+### `POST /transfers`
+
+Registers a transfer. **Requires** `Authorization: Bearer <key>` — see
+[MVP auth](#the-auth-system-is-deliberately-mvp) below.
+
+Request body:
+
+| Field          | Type   | Validation                                                                                                                                                  |
+| -------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `transferId`   | string | Must be a valid ULID (26 Crockford-base32 characters) — `@ferryline/core`'s `isTransferId`.                                                                 |
+| `sourceChain`  | string | Must resolve via `@ferryline/sdk`'s `cctpEvmChain` for the relayer's own configured network — a testnet relayer rejects mainnet chain slugs and vice versa. |
+| `sourceTxHash` | string | `0x`-prefixed 32-byte hex (`/^0x[0-9a-fA-F]{64}$/`) — the EVM deposit-for-burn transaction hash.                                                            |
+| `rail`         | string | Must be `"usdc-cctp"` — the only entry in `SUPPORTED_RAILS`.                                                                                                |
+
+Responses:
+
+| Status | Body                                                                           | When                                                                                         |
+| ------ | ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------- |
+| `201`  | `{ id: string, status: "pending", sourceChain: string, sourceTxHash: string }` | Registered.                                                                                  |
+| `409`  | `{ error: string }` (`"a transfer for <chain>:<hash> is already registered"`)  | Same `sourceChain`/`sourceTxHash` pair already exists.                                       |
+| `429`  | `{ error: string }` (names the attempt count in the current window)            | Registration-time, per-API-key rate limit exceeded (see above — not a per-recipient signal). |
+
+Two more status codes exist in practice but aren't part of this route's own zod `response` schema
+object: `401` (missing/malformed/invalid bearer token, from the `requireApiKey` preHandler) and
+`400` (schema validation failure, from the app-level error handler above).
+
+### `GET /transfers/:id`
+
+Status lookup. **No auth required.** The route's own doc comment explains why plainly:
+
+> No auth required: this is a read of a ULID-keyed row (unguessable) and carries no spend-related
+> side effect, unlike `POST /transfers` which spends the sponsor's gas budget by admitting work.
+
+Response `200`:
+
+| Field               | Type                                                                 |
+| ------------------- | -------------------------------------------------------------------- |
+| `id`                | `string`                                                             |
+| `rail`              | `string`                                                             |
+| `status`            | `"pending" \| "attested" \| "submitting" \| "delivered" \| "failed"` |
+| `sourceChain`       | `string`                                                             |
+| `sourceTxHash`      | `string`                                                             |
+| `sourceDomain`      | `number`                                                             |
+| `destinationChain`  | `string`                                                             |
+| `destinationTxHash` | `string \| null`                                                     |
+| `amount`            | `string \| null` — `null` until the row reaches `attested`           |
+| `recipient`         | `string \| null` — `null` until the row reaches `attested`           |
+| `errorCode`         | `string \| null` (e.g. `"RECIPIENT_RATE_LIMITED"`)                   |
+| `errorDetail`       | `string \| null`                                                     |
+| `version`           | `number`                                                             |
+| `createdAt`         | `string` (ISO-8601)                                                  |
+| `updatedAt`         | `string` (ISO-8601)                                                  |
+
+Response `404`: `{ error: string }` (`"no transfer with id <id>"`) if no row matches.
+
+### `GET /healthz`
+
+**No auth required** — this is a monitoring endpoint, not a data endpoint. Its own doc comment
+notes the balance read is deliberately live, not cached, on every call: "matching the 'no digging
+through logs' requirement over a 'fast endpoint' optimization — this route is for humans and
+monitoring, not a high-frequency hot path."
+
+Response `200`:
+
+| Field                          | Type                  | Notes                                                                           |
+| ------------------------------ | --------------------- | ------------------------------------------------------------------------------- |
+| `status`                       | `"ok"`                |                                                                                 |
+| `service`                      | `"ferryline-relayer"` |                                                                                 |
+| `version`                      | `string`              | From `FERRYLINE_RELAYER_VERSION`.                                               |
+| `uptimeSeconds`                | `number`              |                                                                                 |
+| `now`                          | `string` (ISO-8601)   |                                                                                 |
+| `sponsor.account`              | `string`              | The sponsor's Stellar public key, derived from `FERRYLINE_SPONSOR_SECRET`.      |
+| `sponsor.nativeBalanceStroops` | `string \| null`      | Stroops, as a string (can exceed `Number.MAX_SAFE_INTEGER`); `null` if unknown. |
+| `sponsor.balanceUnknown`       | `boolean`             | `true` if the account doesn't exist yet, isn't funded, or the RPC call failed.  |
+| `dailySpend.spentStroops`      | `string`              | Actual confirmed spend so far today (UTC).                                      |
+| `dailySpend.ceilingStroops`    | `string`              | Echoes `FERRYLINE_DAILY_SPEND_CEILING_STROOPS`.                                 |
+| `dailySpend.ceilingReached`    | `boolean`             | `spentStroops >= ceilingStroops`.                                               |
+
+## Operational caveats
+
+These are real limitations of the current implementation, not softened for the docs:
+
+- **No CORS support anywhere on this API.** There is no CORS middleware, header, or policy of any
+  kind registered on the Fastify app — a grep for `cors` (case-insensitive) across
+  `packages/relayer/src` returns zero hits. If you need to call this API directly from a browser on
+  a different origin, you'll need to put your own reverse proxy or CORS layer in front of it; the
+  relayer itself won't send the headers a browser needs.
+- **No framework-level rate limiting on the two unauthenticated GET routes.** `GET /transfers/:id`
+  and `GET /healthz` have no rate limiting registered at the Fastify level. The one rate limit that
+  exists (`registrationLimiter`) is checked only inside the `POST /transfers` handler, after
+  auth — it does nothing for either GET route. Both reads are individually cheap (an indexed lookup
+  and a live balance read, respectively), but nothing here stops a caller from hitting either one
+  as fast as they like; if that matters for your deployment, put a rate limiter in front at the
+  proxy/gateway layer.
+- **The auth system is deliberately MVP.** `src/http/auth.ts` says so directly:
+
+  > MVP bearer-token allow-list. Per the phase-3 sign-off, this is deliberately NOT a full auth
+  > system: no sessions, no scopes, no key rotation UI — just enough to gate who the sponsor
+  > account pays gas for.
+
+  Concretely: keys are stored as a SHA-256 hash in the `api_keys` table (never plaintext), but
+  there's no admin endpoint to create, list, or revoke them — see
+  [Bootstrapping your first API key](#bootstrapping-your-first-api-key) above, which is `psql`
+  or nothing today. There's no key rotation flow either; revoking a key means setting its
+  `revoked_at` column directly. If you need real multi-tenant auth, session scoping, or a
+  self-service key-management UI, this isn't that yet — treat it as exactly what it says it is,
+  a gate on who the sponsor account pays gas for.
+
+## Where to go next
+
+- [Core Concepts](/docs/core-concepts) — the two rails, the transfer lifecycle, and why CCTP's
+  inbound-delivery gap exists in the first place.
+- [Router](/docs/router) — the Soroban contract this relayer calls into (`mint_and_forward`), and
+  what a sender submits directly for outbound transfers.
+- [Security & Verification](/docs/security) — the project-wide findings that shaped decisions like
+  the ones documented on this page.
+
+## A note on what this page couldn't verify
+
+This page is grounded entirely in `packages/relayer`'s own README, Docker Compose/Dockerfile setup,
+`.env.example`, and the source files that define its config and HTTP layer (`config.ts`,
+`spend/config.ts`, `http/app.ts`, `http/routes/*.ts`, `http/schemas.ts`, `http/auth.ts`,
+`spend/registration-limit.ts`) — all read directly for this page. Two things worth flagging rather
+than glossing over: first, the exact Fastify request-lifecycle ordering between schema validation
+and the `requireApiKey` preHandler is described by the route's own source comment
+(`http/routes/register-transfer.ts`) rather than independently verified against Fastify's lifecycle
+docs here — the practical effect (an unauthenticated or malformed request never reaches the
+database) is the same either way, but the exact hook ordering isn't something this page confirmed
+independently. Second, this page did not run the Docker Compose stack or hit a live endpoint in the
+course of writing it — every request/response example here is copied verbatim from the README or
+derived directly from the zod schemas in source, not captured from a running instance.

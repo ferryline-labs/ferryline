@@ -1,0 +1,517 @@
+---
+title: SDK Reference
+description: Every method, option, and error code in @ferryline/sdk.
+---
+
+`packages/sdk` has no README today — this page is the reference. Everything below is read
+straight from `packages/sdk/src` and `packages/core/src`; where the source itself leaves
+something unverified, this page says so rather than smoothing it over.
+
+## Installing
+
+```bash
+pnpm add @ferryline/sdk
+```
+
+`packages/sdk/package.json`'s `exports` field has a single `"."` entry, so every symbol this page
+documents — the `Ferryline` class, both adapters, the shared types, and the small re-exported
+infra — is importable directly from `"@ferryline/sdk"`. There's no subpath to remember. `@ferryline/core`
+comes along for free: the SDK re-exports every type and value from it that a normal integration
+touches.
+
+## `Ferryline`
+
+The facade. It holds no rail-specific logic itself — it routes a request to whichever registered
+adapter can handle it. From `packages/sdk/src/index.ts`:
+
+```ts
+export interface FerrylineConfig {
+  readonly network: "mainnet" | "testnet";
+  /** Stellar RPC endpoint. */
+  readonly rpcUrl: string;
+  /** Ferryline relayer endpoint, needed for inbound USDC. Optional until the relayer exists. */
+  readonly relayerUrl?: string;
+  /** Where transfers are remembered between build() and track(). Defaults to in-memory. */
+  readonly store?: TransferStore;
+}
+
+class Ferryline {
+  readonly config: FerrylineConfig;
+  readonly store: TransferStore;
+
+  constructor(config: FerrylineConfig);
+}
+```
+
+The constructor sets `this.store = config.store ?? new InMemoryTransferStore()`. Nothing is wired
+up by default — you register the rail(s) you need explicitly, which the source's own comment says
+is deliberate: "the money-moving code paths are opt-in and reviewable one rail at a time."
+
+Note that `relayerUrl` is accepted on the config but never read anywhere in `Ferryline` itself —
+grepping `packages/sdk/src` for `relayerUrl` turns up only this one declaration. It exists so a
+caller can hold the relayer's URL alongside the rest of the SDK's config, but `Ferryline` doesn't
+call the relayer for you; registering an inbound EVM→Stellar transfer with the relayer is a
+separate HTTP call to `POST /transfers`, documented on the [Relayer](/docs/relayer) page.
+
+### `registerAdapter()`
+
+```ts
+registerAdapter(adapter: RailAdapter): this;
+```
+
+Registers a rail adapter, keyed by `adapter.rail`. Returns `this`, so calls chain. Throws
+`ADAPTER_CONFLICT` if an adapter for that rail is already registered — you can't register two
+adapters for the same `RailId` (`"usdc-cctp"` or `"usdt0-layerzero"`).
+
+### `rails()`
+
+```ts
+rails(): readonly RailId[];
+```
+
+Lists the rails currently registered, as `[...this.adapters.keys()]`. Throws nothing.
+
+### `quote()`
+
+```ts
+quote(request: TransferRequest): Promise<Quote>;
+```
+
+Finds the first registered adapter whose `supports(request)` returns true and calls its
+`quote(request)`. Throws `ROUTE_UNSUPPORTED` if no registered adapter supports the request
+(message: `no registered rail moves ${asset} from ${from.chain} to ${to.chain}`). Whatever the
+chosen adapter itself throws (`PARAMETER_REQUIRED`, `PARAMETER_INVALID`, `ROUTE_UNSUPPORTED` for an
+unserved chain pair, etc.) propagates unchanged.
+
+### `build()`
+
+```ts
+build(quote: Quote): Promise<BuiltTransfer>;
+```
+
+Looks up the adapter for `quote.rail` and calls its `build(quote)`. Throws `ROUTE_UNSUPPORTED` if
+no adapter is registered for that rail. Both adapters' own `build()` additionally throw
+`QUOTE_EXPIRED` (past `quote.expiresAt`) or `PREFLIGHT_FAILED` (any `quote.checks` entry still
+failing) before doing anything else.
+
+### `prepareStep()`
+
+```ts
+prepareStep(transferId: TransferId, stepIndex: number): Promise<TransferStep>;
+```
+
+Assembles a deferred step (a `TransferStep` of kind `stellar-transaction-deferred`, see
+`@ferryline/core`'s `rail.ts`) once the step it depends on has confirmed on-chain. Looks the
+transfer up in `this.store`, throwing `TRANSFER_UNKNOWN` if it isn't found, then finds the
+transfer's adapter and throws `ROUTE_UNSUPPORTED` if that adapter has no `prepareStep` at all
+(`rail "${rail}" has no deferred steps`) before delegating. Only `UsdcCctpAdapter` implements
+this today; see [the two-step CCTP flow](#the-deferred-approveburn-flow) below for what the
+adapter itself can additionally throw (`STEP_NOT_READY`, `ALLOWANCE_INSUFFICIENT`).
+
+### `markSubmitted()`
+
+```ts
+markSubmitted(transferId: TransferId, sourceTxHash: string): Promise<void>;
+```
+
+Tells Ferryline which hash the wallet got back after broadcasting a signed step — a thin pass-through
+to `this.store.markSubmitted(transferId, sourceTxHash)`. `InMemoryTransferStore`'s implementation
+rejects with `TRANSFER_UNKNOWN` if the transfer isn't already recorded. `track()` blocks on this
+value being set, so call it right after your wallet returns a transaction hash for the first step.
+
+### `track()`
+
+```ts
+track(transferId: TransferId, signal?: AbortSignal): AsyncIterable<TransferStatus>;
+```
+
+An async generator. Looks the transfer up in `this.store` (throws `TRANSFER_UNKNOWN` if missing),
+then delegates to `adapterByRail(record.rail).track(transferId, signal)` and yields whatever that
+adapter yields. See [Core Concepts](/docs/core-concepts#the-lifecycle) for the stage sequence
+(`created → submitted → verified → delivered`, or `failed`) and the
+[error reference](#transferfailurecode--the-free-form-strings) below for the `TransferFailure.code`
+strings each rail actually produces.
+
+## `UsdcCctpAdapter`
+
+The USDC/CCTP rail: Circle's burn-on-source, mint-on-destination mechanism, both directions
+(Stellar↔EVM), on `testnet` or `mainnet`.
+
+### Constructor options
+
+`UsdcCctpAdapterOptions`, from `packages/sdk/src/rails/usdc-cctp/adapter.ts`:
+
+```ts
+export interface UsdcCctpAdapterOptions {
+  readonly network: CctpNetwork; // "mainnet" | "testnet" — required
+  readonly stellarRpc: StellarRpc; // required
+  readonly store: TransferStore; // required
+  readonly evmReaders?: Readonly<Partial<Record<string, EvmReader>>>;
+  readonly iris?: IrisClient;
+  /** G account used as transaction source for read-only simulations when the sender is a C address. Defaults to the USDC issuer. */
+  readonly simulationSourceAccount?: string;
+  /** G account that pays fees and sequences the transaction when the sender is a C address. */
+  readonly feeSourceAccount?: string;
+  readonly quoteTtlMs?: number;
+  /** First polling delay for Iris and nonce checks; doubles each attempt. Default 5 s. */
+  readonly pollIntervalMs?: number;
+  /** Ceiling for the backoff. Default 60 s. */
+  readonly pollMaxIntervalMs?: number;
+  /** Injected in tests to record delays instead of waiting. */
+  readonly sleep?: SleepFn;
+  readonly now?: () => number;
+  readonly newTransferId?: () => TransferId;
+}
+```
+
+`network`, `stellarRpc`, and `store` are the only required fields. Everything else is optional,
+with these real defaults from the source:
+
+| Option                    | Default                                                                                 | Constant               |
+| ------------------------- | --------------------------------------------------------------------------------------- | ---------------------- |
+| `iris`                    | `createIrisClient(this.cfg.irisBaseUrl)` — the network-appropriate Circle Iris base URL | —                      |
+| `quoteTtlMs`              | `60_000`                                                                                | `DEFAULT_QUOTE_TTL_MS` |
+| `pollIntervalMs`          | `5_000` (JSDoc: "Default 5 s")                                                          | `DEFAULT_POLL_MS`      |
+| `pollMaxIntervalMs`       | `60_000` (JSDoc: "Default 60 s")                                                        | `DEFAULT_POLL_MAX_MS`  |
+| `sleep`                   | the SDK's own `sleep` from `util/backoff.js`                                            | —                      |
+| `now`                     | `Date.now`                                                                              | —                      |
+| `newTransferId`           | `newTransferId` from `@ferryline/core`                                                  | —                      |
+| `simulationSourceAccount` | the network's USDC issuer G account                                                     | —                      |
+| `feeSourceAccount`        | none — required only if the sender is a C (contract) address                            | —                      |
+
+Without `evmReaders`, inbound (EVM→Stellar) quotes throw `ROUTE_UNSUPPORTED` (`no EVM reader
+configured for ${chain}; pass evmReaders`), and outbound delivery tracking degrades to reporting
+`verified` with a detail explaining it can't confirm the mint — it never claims `delivered` without
+a reader.
+
+### `CctpParameters`
+
+CCTP's rail-specific parameters, passed as `TransferRequest.parameters`:
+
+```ts
+export interface CctpParameters {
+  /** Maximum fee the sender accepts, as a decimal USDC string (e.g. "0" or "0.25"). */
+  readonly maxFee: string;
+  /** 1000 = Fast Transfer, 2000 = Standard Transfer. */
+  readonly minFinalityThreshold: 1000 | 2000;
+}
+```
+
+Both fields are **required on every request** — the adapter's own JSDoc is explicit about why:
+
+> Rail-specific parameters. Both are REQUIRED on every request; Ferryline ships no defaults because
+> neither has been verified end to end by this repo (see the two experiment files named in the
+> error).
+
+[Core Concepts](/docs/core-concepts#why-maxfee-and-minfinalitythreshold-have-no-default) covers the
+full reasoning, including the specific `maxFee` unit-verification nuance and the fact that
+`maxFee: "0"` plus both threshold values are now confirmed working end-to-end on testnet even
+though the no-default policy was kept anyway.
+
+`readCctpParameters(request: TransferRequest)` is the exported helper that validates and parses
+these — it's called at the top of `quote()`, before any network call, so a missing or malformed
+parameter fails immediately:
+
+```ts
+function readCctpParameters(request: TransferRequest): {
+  maxFee: Amount;
+  minFinalityThreshold: number;
+};
+```
+
+It throws `PARAMETER_REQUIRED` if either key is absent, and `PARAMETER_INVALID` if `maxFee` isn't a
+parseable decimal USDC string or `minFinalityThreshold` isn't exactly `1000` or `2000`.
+`CCTP_PARAMETER_KEYS` (`["maxFee", "minFinalityThreshold"] as const`) is exported alongside it for
+anyone building a generic parameter form.
+
+### The deferred approve→burn flow
+
+A CCTP burn from Stellar needs the TokenMessengerMinter contract to hold a SAC allowance before the
+burn call can even be simulated (Soroban footprints come from simulation, and the burn's footprint
+depends on state the approve call itself writes). So `build()` on an outbound quote that needs an
+allowance returns two steps instead of one:
+
+1. A ready-to-sign `stellar-transaction` — the `approve` call.
+2. A `stellar-transaction-deferred` step, with `dependsOn: 0`, that cannot be assembled yet.
+
+Once your wallet signs and submits step 0 and it confirms on-chain, call:
+
+```ts
+const burnStep = await ferryline.prepareStep(transferId, 1);
+```
+
+`Ferryline.prepareStep` delegates to the adapter's own `prepareStep`, which:
+
+- Throws `STEP_NOT_READY` if `stepIndex` doesn't match the transfer's recorded deferred burn step
+  index (`step ${stepIndex} of ${transferId} is not a deferred step`).
+- Re-checks the on-chain SAC allowance via `sacAllowance()`, and throws `ALLOWANCE_INSUFFICIENT` if
+  it's still below the burn amount — i.e. calling this before the approve is actually confirmed
+  throws this, not a generic error.
+- Otherwise builds and returns the burn as a signable `stellar-transaction` step.
+
+This two-step shape is CCTP-specific. If a quote's sender already has sufficient allowance,
+`needsApprove` is `false` and `build()` returns the burn as a single ready-to-sign step instead —
+no deferred step, and `prepareStep` is never needed for that transfer.
+
+### `readCctpParameters`, checks, and the rest of `quote()`/`build()`
+
+Every check `quote()` runs comes back in `Quote.checks` with a `PreflightCheckId` (`sender-format`,
+`recipient-format`, `sender-trustline`, `sender-asset-balance`, `sender-native-balance`,
+`recipient-trustline`, `route-limits`, `rail-paused` — from `@ferryline/core`'s `rail.ts`) and, on
+failure, a `remedy` describing what to do about it. `build()` throws `PREFLIGHT_FAILED` if any check
+in the quote is still failing, and re-runs `readCctpParameters(quote.request)` itself so a tampered
+quote can't slip a missing parameter through.
+
+### `track()` and delivery
+
+`track()` polls the Stellar burn transaction for confirmation, then Circle's Iris for the
+attestation (`iris.messagesByTx`, treating a 404 as "not indexed yet"), then — outbound only, and
+only when an `evmReaders` entry exists for the destination — the destination `MessageTransmitterV2`
+contract's `usedNonces(nonce)` for delivery. Inbound (EVM→Stellar) delivery is confirmed by polling
+the Stellar `MessageTransmitter`'s own `is_nonce_used`. See the
+[error reference](#error-reference) below for exactly what `TransferFailure.code` this can yield.
+
+## `Usdt0LayerZeroAdapter`
+
+The USDT0/LayerZero rail: LayerZero's OFT standard, both directions (Stellar↔EVM).
+
+### Constructor options
+
+`Usdt0AdapterOptions`, from `packages/sdk/src/rails/usdt0-layerzero/adapter.ts`:
+
+```ts
+export interface Usdt0AdapterOptions {
+  /** USDT0 exists on Stellar mainnet only (checked 2026-09-11). */
+  readonly network: "mainnet"; // required — literally the only accepted value
+  readonly stellarRpc: StellarRpc; // required
+  readonly store: TransferStore; // required
+  /** Needed for inbound (EVM -> Stellar) quotes and builds, keyed by chain slug. */
+  readonly evmReaders?: Readonly<Partial<Record<string, EvmReader>>>;
+  readonly scan?: ScanClient;
+  /**
+   * G account used as the transaction source for read-only simulations when the sender is a
+   * C-address smart account (a contract cannot be a transaction source). Defaults to the USDT0 issuer.
+   */
+  readonly simulationSourceAccount?: string;
+  /** G account that pays fees and sequences the transaction when the sender is a C address. */
+  readonly feeSourceAccount?: string;
+  readonly quoteTtlMs?: number;
+  readonly pollIntervalMs?: number;
+  readonly now?: () => number;
+  readonly newTransferId?: () => TransferId;
+}
+```
+
+Defaults: `scan` falls back to `createScanClient()` (LayerZero Scan's public mainnet endpoint,
+`https://scan.layerzero-api.com`, no API key); `simulationSourceAccount` falls back to the USDT0
+issuer G account; `quoteTtlMs` defaults to `60_000`; `pollIntervalMs` defaults to `5_000`. Unlike
+`UsdcCctpAdapter`, there's no `pollMaxIntervalMs` or injectable `sleep` option — `track()` here uses
+a fixed poll interval with no exponential backoff (its own local `sleep()` helper, not the shared
+`backoffDelay`).
+
+### The mainnet-only restriction
+
+The constructor's type signature accepts only `"mainnet"` for `network`, and the constructor body
+enforces it at runtime too, verbatim:
+
+```ts
+constructor(options: Usdt0AdapterOptions) {
+  if (options.network !== "mainnet") {
+    throw new FerrylineError(
+      "ROUTE_UNSUPPORTED",
+      "USDT0 has no Stellar testnet deployment (checked 2026-09-11)",
+    );
+  }
+  ...
+}
+```
+
+This isn't a temporary gap waiting on engineering time — as `chains.ts`'s own comment says, USDT0
+has no deployment on Stellar testnet at all: "not on docs.usdt0.to, not in LayerZero's OFT list for
+stellar-testnet, and the only \"USDT0\" assets on testnet Horizon are unrelated issuers." Every
+USDT0 example in this documentation is real activity, but real **mainnet** activity — see
+[Core Concepts](/docs/core-concepts#the-two-rails) for what that means for testing.
+
+### The inbound recipient restriction
+
+Inbound (EVM→Stellar) USDT0 transfers can only be delivered to a Stellar **G account** today. The
+adapter's `quoteInbound` throws immediately for anything else, with this real comment above the
+throw, quoted verbatim:
+
+```ts
+if (recipient.kind !== "account") {
+  // Sign-off 2026-09-11: G recipients only until experiments/inbound-usdt0-c-address.ts has an
+  // answer AND the lead has reviewed it. Do not lift this because a single test passed.
+  throw new FerrylineError(
+    "UNSUPPORTED_RECIPIENT_KIND",
+    `inbound USDT0 can only be delivered to a G… account for now; got a ${recipient.kind} address`,
+  );
+}
+```
+
+Outbound (Stellar→EVM) USDT0 has no such restriction — any non-muxed Stellar sender kind (account
+or contract) is supported there, same as CCTP.
+
+### No rail parameters, no `prepareStep`
+
+Unlike CCTP, `Usdt0LayerZeroAdapter` takes no `parameters` on `TransferRequest` at all — fees come
+entirely from the OFT contract's own `quote_send`/`quote_oft` (Stellar side) or `quoteSend`/
+`quoteOFT` (EVM side) calls, evaluated live during `quote()`.
+
+It also does not implement `prepareStep`. `RailAdapter.prepareStep` is an optional interface member,
+and this adapter simply omits it, so `Ferryline.prepareStep` throws `ROUTE_UNSUPPORTED` (`rail
+"usdt0-layerzero" has no deferred steps`) for any USDT0 transfer. The OFT's own `send()` call
+handles its allowance in a single quote/build pass (an `approve` step ahead of `send` when
+`approval_required()`/`approvalRequired` says so, both ready-to-sign in the same `build()` call) —
+it never produces a deferred step the way CCTP's burn does.
+
+### `track()` and LayerZero Scan
+
+Outbound tracking reads the LayerZero message GUID out of the Stellar `send()` call's own return
+value once the transaction confirms (`tx.returnValue`, decoded via the generated OFT client's
+`funcResToNative`), then polls LayerZero Scan (`GET /v1/messages/tx/{txHash}`) and maps Scan's
+`status.name` onto a Ferryline stage via `stageFromScanStatus` — see the
+[error reference](#transferfailurecode--the-free-form-strings) for the exact status names this maps.
+
+## Error reference
+
+### `FerrylineErrorCode` — the stable codes
+
+Every error Ferryline raises on purpose carries one of these codes, from `packages/core/src/errors.ts`,
+so callers can branch on `error.code` without parsing messages. There are 17. Eight carry their own
+JSDoc comment in the source; the other nine have no comment on the type itself; for those, the
+one-line meaning below is grounded in every real throw site for that code across `packages/core`
+and `packages/sdk` (all traced directly in this task, not guessed) rather than quoted from a
+comment — this is disclosed explicitly rather than presented as if it were JSDoc.
+
+| Code                         | Meaning                                                                                                                                                                                                                                                                                                  | Source          |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- |
+| `AMOUNT_INVALID`             | An amount string couldn't be parsed (`@ferryline/core`'s `parseAmount`) — not a valid decimal, wrong sign, or doesn't fit the asset's decimals.                                                                                                                                                          | usage, no JSDoc |
+| `ADDRESS_INVALID`            | A Stellar strkey (`parseStellarAddress`) or the formatting/round-trip helpers around it were given something malformed — wrong length, bad checksum, or an address kind the caller didn't expect.                                                                                                        | usage, no JSDoc |
+| `TRANSFER_ID_INVALID`        | `assertTransferId` was given a value that isn't a valid transfer id (Ferryline's transfer ids are ULIDs of a fixed length).                                                                                                                                                                              | usage, no JSDoc |
+| `ROUTE_UNSUPPORTED`          | No registered adapter can serve this asset/chain pair, no adapter is registered for a rail at all, a quote wasn't produced by this adapter instance, or (USDT0 specifically) the adapter was constructed for a network it doesn't support, or `prepareStep` was called on a rail with no deferred steps. | usage, no JSDoc |
+| `ADAPTER_CONFLICT`           | `Ferryline.registerAdapter` was called twice for the same `RailId`.                                                                                                                                                                                                                                      | usage, no JSDoc |
+| `TRANSFER_UNKNOWN`           | No transfer record exists for the given `transferId` — thrown by `Ferryline.prepareStep`/`track`, `InMemoryTransferStore.markSubmitted`, and each adapter's own record lookup.                                                                                                                           | usage, no JSDoc |
+| `UNSUPPORTED_RECIPIENT_KIND` | _"Recipient address kind this rail cannot deliver to yet (e.g. C or M for inbound USDT0)."_                                                                                                                                                                                                              | JSDoc           |
+| `PREFLIGHT_FAILED`           | _"A preflight check in the quote failed; build() refuses rather than warns."_                                                                                                                                                                                                                            | JSDoc           |
+| `REFUND_ADDRESS_INVALID`     | A resolved or explicitly supplied `refundAddress` isn't valid for the source chain — a muxed M address, a malformed Stellar address, or a non-EVM address on an EVM source.                                                                                                                              | usage, no JSDoc |
+| `QUOTE_EXPIRED`              | `build()` was called after `quote.expiresAt`.                                                                                                                                                                                                                                                            | usage, no JSDoc |
+| `FEE_SOURCE_REQUIRED`        | _"A build was attempted for a sender that cannot pay the transaction fee itself."_ (a C-address sender with no `feeSourceAccount` configured)                                                                                                                                                            | JSDoc           |
+| `UPSTREAM_ERROR`             | _"Upstream RPC or API returned something we refuse to interpret."_ Covers a bad Iris/Scan HTTP status or shape, a failed or resultless Soroban simulation, and malformed CCTP message bytes.                                                                                                             | JSDoc           |
+| `PARAMETER_REQUIRED`         | _"A rail-specific parameter the caller must supply is missing (no default exists on purpose)."_ (CCTP's `maxFee`/`minFinalityThreshold`)                                                                                                                                                                 | JSDoc           |
+| `PARAMETER_INVALID`          | A supplied rail parameter (or, separately, a wrong-length nonce passed to `nonceUsed`) failed validation.                                                                                                                                                                                                | usage, no JSDoc |
+| `ALLOWANCE_INSUFFICIENT`     | _"The on-chain allowance is below what the next step needs; approve first."_ (CCTP's deferred burn, checked in `prepareStep`)                                                                                                                                                                            | JSDoc           |
+| `FORWARDER_FIELDS_INVALID`   | _"CCTP toward Stellar: mint_recipient or destination_caller is not the CctpForwarder. Funds would strand."_                                                                                                                                                                                              | JSDoc           |
+| `STEP_NOT_READY`             | _"A deferred step was requested before its prerequisite step was confirmed."_                                                                                                                                                                                                                            | JSDoc           |
+
+### `TransferFailure.code` — the free-form strings
+
+`TransferStatus.failure?.code` (see `@ferryline/core`'s `rail.ts`) is typed as a plain `string`, not
+a closed union — each rail is free to surface whatever failure vocabulary its own upstream gives it.
+Two families exist today, both grounded directly in the adapters' `track()` implementations:
+
+- **`SOURCE_TX_FAILED`** — both rails yield this (with `retryable: false`) when the source-chain
+  Stellar transaction itself fails on-chain, before any attestation or LayerZero message exists.
+- **`LAYERZERO_<STATUS>`** — `usdt0-layerzero` only, built as `` `LAYERZERO_${message.status.name}` ``
+  directly from LayerZero Scan's own status name. `scan.ts`'s `stageFromScanStatus` maps Scan's
+  published status vocabulary onto Ferryline's stages; the statuses that map to a terminal `failed`
+  stage (and so are the ones that can actually appear as this failure code) are:
+
+  | Scan status            | Retryable                                                                                                                                                         |
+  | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | `PAYLOAD_STORED`       | Yes — "the executor could not deliver (for USDT0 into Stellar, the classic cause is a missing trustline). LayerZero allows re-execution once the cause is fixed." |
+  | `FAILED`               | No                                                                                                                                                                |
+  | `BLOCKED`              | No                                                                                                                                                                |
+  | `APPLICATION_BURNED`   | No                                                                                                                                                                |
+  | `MALFORMED_COMMAND`    | No                                                                                                                                                                |
+  | `UNRESOLVABLE_COMMAND` | No                                                                                                                                                                |
+
+  `DELIVERED` maps to the `delivered` stage (not a failure), and `CONFIRMING` maps to `verified`.
+  Every other status name — including any LayerZero Scan might add in the future — falls through to
+  a non-terminal `submitted` mapping rather than being treated as failure; the source comment notes
+  only `DELIVERED` has actually been observed against real mainnet traffic so far, so this fallback
+  is a deliberate conservative default, not a verified complete list.
+
+`usdc-cctp`'s CCTP burn/mint path produces no equivalent `<PREFIX>_<STATUS>` family of its own —
+its only free-form failure code is the shared `SOURCE_TX_FAILED` above; every other CCTP failure
+this adapter can raise surfaces as a `FerrylineErrorCode` thrown before or during `track()`, not as
+a `TransferFailure.code`.
+
+### A gap worth flagging: Soroban-native error tables aren't `FerrylineErrorCode`s
+
+USDT0's generated Soroban bindings (`packages/sdk/src/rails/usdt0-layerzero/generated/oft.ts`, a
+single ~117 KB generated client) carry their own contract-level error tables — `OFTError`,
+`EndpointError`, `OAppError`, `OFTFeeError`, `OFTPausableError`, `RateLimitError`, and several more
+lower-level ones (`AuthError`, `RbacError`, `OwnableError`, and others), each a numeric-code-to-message
+map for one Soroban contract's own error enum. None of that surfaces as its own
+`FerrylineErrorCode` — a contract-level revert reaches the caller only through the generic
+`UPSTREAM_ERROR` path (a failed or resultless Soroban simulation via `simulateView`/`buildInvocation`
+in `packages/sdk/src/stellar/rpc.ts`), with whatever raw message the RPC gave back. If you need to
+distinguish, say, "OFT is paused" from "insufficient allowance" from a Soroban revert specifically,
+today that means parsing the `UPSTREAM_ERROR` message string yourself — this SDK does not decode
+those tables into a typed error for you.
+
+## Supporting infrastructure
+
+`@ferryline/sdk` also re-exports a handful of smaller building blocks that other Ferryline services
+(chiefly the relayer) reuse rather than reimplement, rather than being part of the main
+quote/build/track surface: `backoffDelay` and `sleep` (`util/backoff.js` — exponential backoff,
+`initial * 2^attempt` clamped to a ceiling, and a signal-aware sleep that rejects with `"aborted"`
+when the `AbortSignal` fires mid-wait); `SDK_VERSION` and `FERRYLINE_SDK_USER_AGENT`
+(`version.js` — `SDK_VERSION` mirrors `package.json`'s version, currently `"0.0.0"`, with a test
+that keeps the two in sync; `FERRYLINE_SDK_USER_AGENT` is `` `ferryline-sdk/${SDK_VERSION}` ``, sent
+on every Iris request); `ERC20_ABI` and `EVM_ADDRESS` (`evm/reader.js` — a minimal `approve`/
+`allowance`/`balanceOf` ABI and the `/^0x[0-9a-fA-F]{40}$/` regex both adapters validate EVM
+addresses against), plus the `EvmReader` interface each adapter's `evmReaders` option expects; and
+the Stellar RPC helpers (`stellar/rpc.js` — `simulateView` and `buildInvocation` wrap simulate/
+assemble into read-only calls and unsigned envelopes respectively, `getTrustline` and
+`getNativeBalance` read ledger entries directly by key, and `trustlineKey`/`accountKey` build those
+`xdr.LedgerKey` values). None of these carry rail-specific knowledge — they're the same primitives
+`UsdcCctpAdapter` and `Usdt0LayerZeroAdapter` are themselves built on top of.
+
+## Recent changes worth knowing about
+
+`packages/sdk/CHANGELOG.md` documents a real, previously-shipped bug worth knowing if you're
+reading older code or issues: both outbound builders used to attach a `MEMO_TEXT` to the Stellar
+transaction they built, but Soroban `InvokeHostFunctionOp` transactions can never carry a memo on
+any network — every real outbound send on either rail failed until this was fixed (2026-09-12).
+`track()` never actually needed the memo: it has always resolved `sourceTxHash` from the caller's
+own `markSubmitted()` call and, for USDT0, the LayerZero GUID from `send()`'s own on-chain return
+value. Both `memoFitsText` and `buildInvocation`'s `memoText` parameter were removed outright in a
+same-day follow-up rather than left dead, so if you're looking for either symbol in older examples
+it's gone on purpose. Separately, on 2026-09-15, `nonceUsed` (`usdc-cctp/stellar.ts`) started
+validating its nonce is exactly 32 bytes client-side (`PARAMETER_INVALID` instead of an opaque
+Soroban VM trap) — see the changelog for the full detail on both fixes.
+
+## Example: reading a request through the reference types
+
+Reusing the same testnet addresses as [Getting Started](/docs/getting-started) — no new addresses
+invented for this page:
+
+```ts
+import type { TransferRequest } from "@ferryline/sdk";
+
+const request: TransferRequest = {
+  asset: "USDC",
+  from: { chain: "stellar", address: "GBBA3HN2PNOAJGR6R5VY34SQFDFTZFQIGDPYATJB34UXXFUHVR4KZRAZ" },
+  to: { chain: "ethereum-sepolia", address: "0x78253429b7483FBcCEf90e943526BB990a4D5b50" },
+  amount: "0.5",
+  parameters: { maxFee: "0", minFinalityThreshold: 2000 },
+};
+```
+
+For the full sequence this request feeds into — `quote → build → sign → markSubmitted → track` —
+see [Core Concepts](/docs/core-concepts#the-lifecycle) for the shape and the
+[end-to-end walkthrough](/docs/bridge-walkthrough) for a real run against a real testnet
+transaction, with real hashes.
+
+## What this page doesn't cover
+
+Registering an **inbound** (EVM→Stellar) transfer with the self-hosted relayer — `POST /transfers`
+in `@ferryline/relayer` (`packages/relayer/src/http/routes/register-transfer.ts`) — is a different
+package's HTTP API, not part of `@ferryline/sdk`. It's the [Relayer](/docs/relayer) page's job to
+document; this page only covers what you import from `@ferryline/sdk` itself. There is also no
+`registerOutboundTransfer` or `registerInboundTransfer` method anywhere in this SDK — if you've seen
+either name mentioned elsewhere, it doesn't exist in the current source (confirmed by a direct
+search of `packages/sdk/src` while writing this page); the closest things are `Ferryline.build()`
+(which records the transfer for you) and the relayer's own registration endpoint above.
