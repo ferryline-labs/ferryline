@@ -508,3 +508,162 @@ describe("ferryline-widget — outbound CCTP delivery caveat (STEP 3 finding)", 
     el.remove();
   });
 });
+
+describe("ferryline-widget — a stale, abandoned submission cannot clobber a newer transfer's phase", () => {
+  /**
+   * Real bug, found live during the submitStellarTransaction rejection-recheck fix's own real
+   * testnet UI testing: `set request` starts a brand new quote/build/sign/submit chain with no
+   * cancellation of whatever chain was already in flight. `submitStellarTransactionWithRejectionRecheck`
+   * (client.ts) can legitimately take up to ~2 minutes across its bounded retries before settling —
+   * long enough that a real user, seeing no progress feedback, gives up and sets a NEW `request`
+   * while the OLD one is still awaiting that submission. When the old one finally settles (success
+   * OR failure), its async continuation called `this.setPhase(...)` unconditionally, overwriting
+   * whatever the NEW transfer's own, already-further-along phase was — confirmed for real: a
+   * completed transfer's `tracking` phase was silently replaced by an old, abandoned submission's
+   * `sign-failed`, tens of seconds after the new transfer had already succeeded.
+   *
+   * Fix under test: `#requestGeneration`, bumped on every `set request`, captured by each async flow
+   * at entry, and checked by `setPhaseIfCurrent` before every post-`await` phase transition — a
+   * stale flow's result is dropped rather than rendered.
+   */
+  it("an OLD submission that finally REJECTS after a NEWER request has already succeeded does not overwrite the current (successful) phase", async () => {
+    const { el, adapter, wallet } = makeElement();
+    adapter.statuses = [
+      { transferId: "" as TransferId, stage: "submitted", updatedAt: Date.now() },
+    ];
+    // The OLD transfer's submitStellarTransaction call: deliberately never resolves until the test
+    // explicitly settles it below, simulating the real ~2-minute worst case the fix's retry/recheck
+    // window can legitimately take.
+    let rejectOldSubmission!: (error: Error) => void;
+    const oldSubmissionPromise = new Promise<string>((_resolve, reject) => {
+      rejectOldSubmission = reject;
+    });
+    const client = el.testClientOverride!;
+    client.submitStellarTransaction = () => oldSubmissionPromise;
+
+    el.request = REQUEST;
+    await vi.waitFor(() =>
+      expect(el.shadowRoot?.querySelector('[part="build-button"]')).not.toBeNull(),
+    );
+    el.shadowRoot?.querySelector<HTMLButtonElement>('[part="build-button"]')?.click();
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('[part="preview"]')).not.toBeNull());
+    el.shadowRoot?.querySelector<HTMLButtonElement>('[data-wallet-module="freighter"]')?.click();
+    await vi.waitFor(() =>
+      expect(
+        el.shadowRoot?.querySelector('[part="confirm-button"]')?.hasAttribute("disabled"),
+      ).toBe(false),
+    );
+    el.shadowRoot?.querySelector<HTMLButtonElement>('[part="confirm-button"]')?.click();
+    // Now genuinely stuck inside the OLD submission's still-pending promise, exactly like the real
+    // bug: signing already happened, submission is in flight, nothing will move until the promise
+    // above settles.
+    await vi.waitFor(() =>
+      expect(el.shadowRoot?.querySelector('[part="status"]')?.textContent).toContain(
+        "Waiting for your wallet",
+      ),
+    );
+
+    // The user gives up on the stuck transfer and starts a NEW one — the real reproduction. This
+    // NEW transfer's own submitStellarTransaction succeeds normally.
+    client.submitStellarTransaction = () => Promise.resolve("new-transfer-real-tx-hash");
+    el.request = REQUEST;
+    await vi.waitFor(() =>
+      expect(el.shadowRoot?.querySelector('[part="build-button"]')).not.toBeNull(),
+    );
+    el.shadowRoot?.querySelector<HTMLButtonElement>('[part="build-button"]')?.click();
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('[part="preview"]')).not.toBeNull());
+    el.shadowRoot?.querySelector<HTMLButtonElement>('[data-wallet-module="freighter"]')?.click();
+    await vi.waitFor(() =>
+      expect(
+        el.shadowRoot?.querySelector('[part="confirm-button"]')?.hasAttribute("disabled"),
+      ).toBe(false),
+    );
+    el.shadowRoot?.querySelector<HTMLButtonElement>('[part="confirm-button"]')?.click();
+
+    // The NEW transfer completes for real, all the way to tracking.
+    await vi.waitFor(() => {
+      expect(el.shadowRoot?.querySelector('[part="status"]')?.textContent).not.toContain(
+        "Waiting for your wallet",
+      );
+    });
+    const statusAfterNewTransferSucceeded =
+      el.shadowRoot?.querySelector('[part="status"]')?.textContent;
+    expect(statusAfterNewTransferSucceeded).not.toContain("Signing failed");
+
+    // NOW the OLD, abandoned submission's promise finally rejects — exactly like the real
+    // tx_bad_seq-class rejection that took the fix's full bounded retry/recheck window to conclude,
+    // long after the user had already moved on.
+    rejectOldSubmission(new Error("submission rejected: ERROR (stale, abandoned transaction)"));
+    // Give the rejected promise's .catch() handler a chance to run (and, if the bug were still
+    // present, to call setPhase and clobber the current render).
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // The widget's rendered phase must still reflect the NEW, successful transfer — the stale
+    // rejection must never have reached the DOM as "Signing failed".
+    expect(el.shadowRoot?.querySelector('[part="status"]')?.textContent).not.toContain(
+      "Signing failed",
+    );
+    expect(el.shadowRoot?.querySelector('[part="status"]')?.textContent).toBe(
+      statusAfterNewTransferSucceeded,
+    );
+    expect(wallet.signedXdr).toBeDefined();
+    el.remove();
+  });
+
+  it("an OLD submission that finally SUCCEEDS after a NEWER request is already in flight does not overwrite the newer transfer's phase either", async () => {
+    const { el, adapter, wallet } = makeElement();
+    adapter.statuses = [
+      { transferId: "" as TransferId, stage: "submitted", updatedAt: Date.now() },
+    ];
+    let resolveOldSubmission!: (hash: string) => void;
+    const oldSubmissionPromise = new Promise<string>((resolve) => {
+      resolveOldSubmission = resolve;
+    });
+    const client = el.testClientOverride!;
+    client.submitStellarTransaction = () => oldSubmissionPromise;
+
+    el.request = REQUEST;
+    await vi.waitFor(() =>
+      expect(el.shadowRoot?.querySelector('[part="build-button"]')).not.toBeNull(),
+    );
+    el.shadowRoot?.querySelector<HTMLButtonElement>('[part="build-button"]')?.click();
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('[part="preview"]')).not.toBeNull());
+    el.shadowRoot?.querySelector<HTMLButtonElement>('[data-wallet-module="freighter"]')?.click();
+    await vi.waitFor(() =>
+      expect(
+        el.shadowRoot?.querySelector('[part="confirm-button"]')?.hasAttribute("disabled"),
+      ).toBe(false),
+    );
+    el.shadowRoot?.querySelector<HTMLButtonElement>('[part="confirm-button"]')?.click();
+    await vi.waitFor(() =>
+      expect(el.shadowRoot?.querySelector('[part="status"]')?.textContent).toContain(
+        "Waiting for your wallet",
+      ),
+    );
+
+    // A new request cancels-in-spirit the old one (the widget moves on to quoting/building fresh),
+    // but does NOT actually cancel the old submission's in-flight promise — it's still out there.
+    el.request = REQUEST;
+    await vi.waitFor(() =>
+      expect(el.shadowRoot?.querySelector('[part="build-button"]')).not.toBeNull(),
+    );
+    const statusAfterNewRequestReachedBuild =
+      el.shadowRoot?.querySelector('[part="status"]')?.textContent;
+
+    // The OLD submission finally resolves successfully (e.g. the false-rejection case the retry/
+    // recheck fix defends against, resolved as a real success) — but it belongs to a transfer the
+    // widget has already moved past.
+    resolveOldSubmission("stale-old-transfer-tx-hash");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // The widget must still show the NEW transfer's own current phase (still at "quoted", since
+    // the new one's own build button hasn't been clicked yet in this test) — not silently jump to
+    // "tracking" for a transferId the current phase's `built` object doesn't even reference.
+    expect(el.shadowRoot?.querySelector('[part="status"]')?.textContent).toBe(
+      statusAfterNewRequestReachedBuild,
+    );
+    expect(el.shadowRoot?.querySelector('[part="tracking"]')).toBeNull();
+    expect(wallet.signedXdr).toBeDefined();
+    el.remove();
+  });
+});
