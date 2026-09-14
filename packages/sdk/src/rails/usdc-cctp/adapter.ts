@@ -27,8 +27,9 @@ import {
 import { Asset, type Account } from "@stellar/stellar-sdk";
 import { Api } from "@stellar/stellar-sdk/rpc";
 import { Buffer } from "buffer";
+import { isAddress } from "viem";
 
-import { ERC20_ABI, EVM_ADDRESS, type EvmReader } from "../../evm/reader.js";
+import { ERC20_ABI, type EvmReader } from "../../evm/reader.js";
 import { backoffDelay, sleep as defaultSleep, type SleepFn } from "../../util/backoff.js";
 import {
   buildInvocation,
@@ -476,12 +477,14 @@ export class UsdcCctpAdapter implements RailAdapter {
           : `${sender.kind} sender`,
       ),
     );
-    const recipientOk = EVM_ADDRESS.test(request.to.address);
+    const recipientOk = isAddress(request.to.address);
     checks.push(
       check(
         "recipient-format",
         recipientOk,
-        recipientOk ? "EVM address" : "recipient must be a 0x-prefixed 20-byte hex address",
+        recipientOk
+          ? "EVM address"
+          : "recipient must be a 0x-prefixed 20-byte hex address with a valid checksum",
       ),
     );
     const refundAddress = this.resolveStellarRefund(request);
@@ -760,12 +763,14 @@ export class UsdcCctpAdapter implements RailAdapter {
     // The forwarder delivers to G, C and M recipients (it emits MuxedAddress). G observed on mainnet.
     const recipient = parseStellarAddress(request.to.address);
     checks.push(check("recipient-format", true, `${recipient.kind} recipient via CctpForwarder`));
-    const senderOk = EVM_ADDRESS.test(request.from.address);
+    const senderOk = isAddress(request.from.address);
     checks.push(
       check(
         "sender-format",
         senderOk,
-        senderOk ? "EVM address" : "sender must be a 0x-prefixed 20-byte hex address",
+        senderOk
+          ? "EVM address"
+          : "sender must be a 0x-prefixed 20-byte hex address with a valid checksum",
       ),
     );
     const refundAddress = this.resolveEvmRefund(request);
@@ -809,7 +814,7 @@ export class UsdcCctpAdapter implements RailAdapter {
 
     let needsApprove = true;
     if (senderOk) {
-      const sender = request.from.address as `0x${string}`;
+      const sender = request.from.address;
       const balance = (await reader.readContract({
         address: source.usdc,
         abi: ERC20_ABI,
@@ -863,7 +868,7 @@ export class UsdcCctpAdapter implements RailAdapter {
       this.quotes.set(quote, {
         direction: "in",
         source,
-        sender: request.from.address as `0x${string}`,
+        sender: request.from.address,
         recipient: request.to.address,
         amount6: amount.value,
         maxFee6: params.maxFee.value,
@@ -963,10 +968,10 @@ export class UsdcCctpAdapter implements RailAdapter {
 
   private resolveEvmRefund(request: TransferRequest): string {
     const candidate = request.refundAddress ?? request.from.address;
-    if (!EVM_ADDRESS.test(candidate)) {
+    if (!isAddress(candidate)) {
       throw new FerrylineError(
         "REFUND_ADDRESS_INVALID",
-        "refund address must be a 0x-prefixed 20-byte hex address",
+        "refund address must be a 0x-prefixed 20-byte hex address with a valid checksum",
       );
     }
     return candidate;
