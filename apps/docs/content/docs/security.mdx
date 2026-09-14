@@ -160,40 +160,38 @@ verified" section, not resolved and not assumed in either direction:
 
 ## Real test counts, verified fresh for this page
 
-An earlier version of this page repeated figures from `README.md`/`ARCHITECTURE.md` that turned
-out to be stale — real Phase 6 test files roughly doubled the SDK's and relayer's counts without
-those headline numbers being updated. So rather than repeat a number from another document, every
-count below comes from actually running each package's real test suite, on 2026-09-14:
+An earlier version of this page (verified 2026-09-14, before Phase 7) already caught and disclosed
+one round of staleness in `README.md`/`ARCHITECTURE.md`'s own figures — and then, between that
+verification and this one, Phase 7's real address-checksum fix added four more SDK tests without
+this page's own SDK count being updated either. So rather than repeat a number from another
+document (including an earlier version of this same page), every count below comes from actually
+running each package's real test suite, fresh, on 2026-09-14:
 
-| Package                    | Command                                       | Result                       |
-| -------------------------- | --------------------------------------------- | ---------------------------- |
-| `@ferryline/core`          | `pnpm --filter @ferryline/core test`          | 60 tests passing (4 files)   |
-| `@ferryline/sdk`           | `pnpm --filter @ferryline/sdk test`           | 91 tests passing (8 files)   |
-| `ferryline-relayer`        | `pnpm --filter ferryline-relayer test`        | 196 tests passing (17 files) |
-| `@ferryline/widget`        | `pnpm --filter @ferryline/widget test`        | 35 tests passing (4 files)   |
-| `@ferryline/design-tokens` | `pnpm --filter @ferryline/design-tokens test` | 16 tests passing (1 file)    |
-| `@ferryline/site`          | `pnpm --filter @ferryline/site test`          | 14 tests passing (3 files)   |
-| `ferryline-router`         | `cargo test` (`contracts/router`)             | 32 tests passing             |
+| Package                           | Command                                            | Result                       |
+| --------------------------------- | -------------------------------------------------- | ---------------------------- |
+| `@ferryline/core`                 | `pnpm --filter @ferryline/core test`               | 60 tests passing (4 files)   |
+| `@ferryline/sdk`                  | `pnpm --filter @ferryline/sdk test`                | 95 tests passing (8 files)   |
+| `ferryline-relayer`               | `pnpm --filter ferryline-relayer test`             | 196 tests passing (17 files) |
+| `ferryline-relayer` (integration) | `pnpm --filter ferryline-relayer test:integration` | 37 tests passing (6 files)   |
+| `@ferryline/widget`               | `pnpm --filter @ferryline/widget test`             | 35 tests passing (4 files)   |
+| `@ferryline/design-tokens`        | `pnpm --filter @ferryline/design-tokens test`      | 16 tests passing (1 file)    |
+| `@ferryline/site`                 | `pnpm --filter @ferryline/site test`               | 14 tests passing (3 files)   |
+| `@ferryline/docs`                 | `pnpm --filter @ferryline/docs test`               | 2 tests passing (1 file)     |
+| `ferryline-router`                | `cargo test` (`contracts/router`)                  | 32 tests passing             |
 
-That's **444 passing tests**, all independently re-run for this page, not carried from another
-document. Two things worth being precise about, disclosed rather than smoothed over:
+That's **487 passing tests**, all independently re-run for this page, including the relayer's
+live-database integration tests — a real, disposable Postgres container was available this time
+(`docker compose up -d postgres`, see the [relayer page](/docs/relayer)), so all 37 were actually
+run, not estimated. One thing worth being precise about, disclosed rather than smoothed over:
 
-- The relayer's `test` script deliberately excludes its live-database integration tests
-  (`--exclude '**/*.integration.test.ts'`); those need a real, disposable Postgres container
-  (`docker compose up -d postgres`, see the [relayer page](/docs/relayer)) that wasn't available
-  in the environment this page was verified from (no running Docker daemon). Real evidence points
-  to roughly 37 of them now — up from an earlier 18, doubled by the same real inbound/outbound
-  split behind the relayer's 98→196 unit-test growth above — but this page did not independently
-  re-run them, so treat 37 as a well-evidenced estimate, not a confirmed count the way the 444
-  above are.
-- **A real discrepancy in the project's own root docs, found while verifying this page, not fixed
-  here:** `README.md`'s current headline ("353 automated tests… 116 relayer including
-  live-database integration tests") and `ARCHITECTURE.md`'s equivalent figures don't reflect the
-  real current counts above — they were written before Phase 6's real test additions and haven't
-  been updated since. This page's own numbers are independently re-run and real; fixing the root
-  project docs' headline figures is out of scope for this docs site to do unilaterally, but is
-  exactly the kind of stale-claim fix [Contributing](/docs/contributing)'s Documentation section
-  welcomes.
+- **A real discrepancy in the project's own root docs, found while verifying an earlier version of
+  this page, since fixed:** `README.md`'s and `ARCHITECTURE.md`'s headline figures were stale
+  (written before Phase 6's real test additions, then stale again after Phase 7's), and have now
+  been updated to the same real numbers as the table above — including no longer conflating the
+  relayer's unit and integration counts into one figure, which was itself part of how the earlier
+  headline went stale. If a future phase adds tests without these three documents being updated
+  together, treat that as the same class of gap this note exists to guard against, not something
+  that can't happen again.
 
 ## Where to go next
 

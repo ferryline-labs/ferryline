@@ -8,13 +8,16 @@ Smart-account (Soroban C-address) wallets are a first-class concern throughout, 
 bolted on later.
 
 **Status: real, tested, and merged, pre-alpha.** Every package below has shipped code, a real test
-suite, and (where the flow reaches an actual network) real, independently-verified transactions
-against Stellar testnet, Ethereum Sepolia, and Circle's Iris attestation service, nothing is on
-mainnet yet. This is not a scaffold or a design document: 353 automated tests currently pass across
-seven packages (60 core, 83 SDK, 116 relayer including live-database integration tests, 34 widget,
-16 design-tokens, 32 Soroban contract, 14 site), and several real, on-chain transaction hashes are
-recorded and
-independently checkable right now, not merely claimed. See
+suite, and real, independently-verified transactions — against Stellar testnet, Ethereum Sepolia,
+and Circle's Iris attestation service for CCTP, and, for USDT0, a real first-party mainnet send
+(Stellar → Arbitrum, since USDT0 has no Stellar testnet deployment to test against — see
+[FAQ](apps/docs/content/docs/faq.mdx) for why). That one real transaction is not the same claim as
+"production-ready on mainnet": the CCTP rail and the Soroban router remain testnet-only, and no
+formal security review has happened yet. This is not a scaffold or a design document: 487
+automated tests currently pass across eight packages (60 core, 95 SDK, 196 relayer unit tests + 37
+live-database integration tests, 35 widget, 16 design-tokens, 32 Soroban contract, 14 site, 2
+docs), and several real, on-chain transaction hashes are recorded and independently checkable right
+now, not merely claimed. See
 [Verified facts and honest gaps](#verified-facts-and-honest-gaps) below for exactly what's been
 proven versus what's still open, and [ARCHITECTURE.md](ARCHITECTURE.md) for a full technical
 write-up of how every piece actually works.
