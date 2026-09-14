@@ -168,17 +168,28 @@ function isOutboundCctp(quote: Quote): boolean {
  * delay guidance at all.
  *
  * What IS real: every `tx_bad_seq` rejection observed during this widget's own real testnet
- * E2E testing (4 for 4, across multiple sessions) was the SECOND of two Stellar transactions
+ * E2E testing (many, across multiple sessions) was the SECOND of two Stellar transactions
  * submitted back to back from the same account — the approve confirming, then the burn being built
- * and submitted immediately after. Two of those four were false rejections (the transaction had, in
- * fact, landed — confirmed independently via Horizon); the other two were genuine failures (the
+ * and submitted immediately after. Some of those were false rejections (the transaction had, in
+ * fact, landed — confirmed independently via Horizon); others were genuine failures (the
  * transaction never landed even after the rejection-recheck fix's own bounded retries) — see
  * `submitStellarTransactionWithRejectionRecheck`'s own doc comment in client.ts for that fix, which
  * remains the correct backstop here regardless of this delay's effect. This delay is a mitigation
  * aimed at reducing how often the false-rejection class happens in the first place, reasoned from
  * that real, repeated pattern — not a confirmed fix for a documented platform issue.
+ *
+ * The 3000ms this constant started at was itself found insufficient by further real testing: this
+ * exact `tx_bad_seq` rejection kept recurring even with that delay in place. A direct, live
+ * measurement taken during that investigation (comparing `getLatestLedger` on
+ * `soroban-testnet.stellar.org` against Horizon's own latest ledger at the same moment) found this
+ * public RPC endpoint genuinely running about 2 ledgers, roughly 10-12 real seconds, behind the
+ * actual network — a real, current lag on this specific node at that time, not a one-off. Bumped to
+ * 15000ms to sit comfortably above that measured gap. This value is a snapshot of one measurement,
+ * not a guaranteed bound — the lag can vary, and `submitStellarTransactionWithRejectionRecheck`'s
+ * own bounded retry/recheck (client.ts) is the actual, correct safety net that still applies
+ * regardless of whether this delay turns out to be enough on any given real run.
  */
-const POST_APPROVE_BUILD_DELAY_MS = 3000;
+const POST_APPROVE_BUILD_DELAY_MS = 15000;
 
 export class FerrylineWidget extends HTMLElement {
   static readonly observedAttributes = [
