@@ -8,6 +8,41 @@ so entries through the `nonceUsed` fix are dated rather than versioned, and refl
 shipped as part of `0.1.0`. Starting with `0.1.1`, entries are grouped under their real published
 version.
 
+## 0.1.2 (2026-09-15)
+
+### Changed
+
+- **`Ferryline.registerOutboundTransfer(transferId)` now returns
+  `Promise<RegisterOutboundTransferResult>` (`{ registered: boolean, error?: string }`) instead of
+  `Promise<void>`.** Its existing "never breaks the caller's flow" guarantee is unchanged — it still
+  never throws, for any reason (no relayer configured, not an outbound CCTP transfer, a store read
+  failure, or the relayer call itself genuinely failing all resolve rather than reject). What changed
+  is that a caller can now tell these outcomes apart: `registered: true` only for a real, confirmed
+  `201` from the relayer; `registered: false` with no `error` for every "not applicable" case (same
+  silent outcome those cases already had); `registered: false` with a real `error` message only when
+  a registration attempt genuinely happened and failed.
+
+  **Why:** found live, via `@ferryline/widget`'s own real testnet testing. A misconfigured relayer
+  API key produced a genuine `401`, correctly logged via `console.error`, but the widget's delivery
+  caveat still rendered "this transfer has been registered with the configured relayer" — an honest
+  false-positive claim, because the old `void` return gave the widget no way to know registration had
+  actually failed. `@ferryline/widget` now uses the real result to choose between three caveat
+  variants (not configured / genuinely registered / genuinely failed) instead of assuming success
+  whenever a relayer was configured at all.
+
+  **This is technically a breaking type change** (`Promise<void>` → `Promise<RegisterOutboundTransferResult>`)
+  released as a patch rather than a minor bump: pre-1.0, no known external callers besides this
+  monorepo's own widget, and additive in practice for any caller who was only ever `await`-ing the
+  call without using its return value. If you have code that asserts on this method's resolved value
+  being `undefined`, or otherwise types it as `void`, it needs updating to the new
+  `RegisterOutboundTransferResult` shape.
+
+  Every real call site in this repo was updated: `@ferryline/widget`'s own `afterStepSubmitted`
+  captures the result and threads it into its delivery-caveat rendering; this package's own
+  `index.test.ts` (13 tests, 5 needed real changes to assert the new result shape for both the
+  not-applicable and genuine-failure cases, and to assert `{ registered: true }` directly on the
+  success paths rather than only inferring success from `fetch` call counts).
+
 ## 0.1.1 (2026-09-14)
 
 ### Fixed
