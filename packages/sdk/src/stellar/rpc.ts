@@ -1,6 +1,13 @@
 import { FerrylineError } from "@ferryline/core";
-import { BASE_FEE, Contract, Keypair, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
-import type { Account, Asset, Transaction } from "@stellar/stellar-sdk";
+import {
+  Account,
+  BASE_FEE,
+  Contract,
+  Keypair,
+  TransactionBuilder,
+  xdr,
+} from "@stellar/stellar-sdk";
+import type { Asset, Transaction } from "@stellar/stellar-sdk";
 import { Api, assembleTransaction } from "@stellar/stellar-sdk/rpc";
 
 /**
@@ -37,7 +44,19 @@ function buildUnsimulated(params: InvokeParams): Transaction {
   // packages/sdk/CHANGELOG.md's "Unreleased" entry). Removing it here, not just at the call sites,
   // makes it a compile-time impossibility for any future caller to reintroduce this bug through this
   // function, rather than relying on nobody happening to pass the field.
-  return new TransactionBuilder(params.source, {
+  //
+  // `TransactionBuilder.build()` mutates its source `Account` in place, incrementing its sequence
+  // number — even for a transaction that's never signed or submitted (confirmed directly in the
+  // vendored @stellar/stellar-sdk: `base/transaction_builder.js`'s `build()` unconditionally calls
+  // `this.source.incrementSequenceNumber()`). `simulateView` callers routinely share one `Account`
+  // object across a read-only check (e.g. `sacAllowance`) and a later real, submitted build (e.g. the
+  // burn step) for the same caller — a real testnet run reproduced exactly this: the allowance check's
+  // throwaway simulation silently consumed a sequence number, so the real burn transaction was built
+  // one slot too high and rejected on-chain with txBAD_SEQ. Building against a private clone here, not
+  // just fixing the one call site, makes every current and future `simulateView`/`buildInvocation`
+  // caller immune regardless of how many times a shared `Account` is passed through this function.
+  const source = new Account(params.source.accountId(), params.source.sequenceNumber());
+  return new TransactionBuilder(source, {
     fee: BASE_FEE,
     networkPassphrase: params.networkPassphrase,
   })

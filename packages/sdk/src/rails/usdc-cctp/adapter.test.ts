@@ -429,6 +429,22 @@ describe("outbound build: approve first, then deposit_for_burn", () => {
     expect(decoded.tx.memo.type).toBe("none");
   });
 
+  it("prepareStep's read-only allowance check must not consume a sequence number meant for the real burn (REGRESSION GUARD: a real testnet run built the burn transaction one sequence number too high and it was rejected on-chain with txBAD_SEQ — sacAllowance's throwaway simulation shared the same Account object as the real, submitted build, and TransactionBuilder.build() increments its source's sequence even for a transaction that is never signed or submitted)", async () => {
+    const { adapter, rpc } = harness();
+    const built = await adapter.build(await adapter.quote(outbound));
+    rpc.setAllowance(REAL_AMOUNT7);
+    const step = await adapter.prepareStep(built.transferId, 1);
+    if (step.kind !== "stellar-transaction") {
+      throw new Error("expected a signable step");
+    }
+    const decoded = decodeStellarStep(step.xdr);
+    // FakeStellarRpc.getAccount always hands back sequence "100" (fake-rpc.test-support.ts), so the
+    // one real, submitted transaction prepareStep builds here must land on 101 — exactly one past the
+    // fetched account's current sequence. Before the fix this was "102": sacAllowance's simulate-only
+    // build silently consumed 101 first, leaving the real burn one slot too high.
+    expect(decoded.tx.sequence).toBe("101");
+  });
+
   it("with a sufficient standing allowance, builds the burn directly as a single signable step", async () => {
     const { adapter } = harness({ allowance: 10_000_000_000n });
     const built = await adapter.build(await adapter.quote(outbound));
