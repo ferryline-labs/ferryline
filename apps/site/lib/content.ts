@@ -1,16 +1,22 @@
 /**
- * External and future-route destinations. Every value is `#` because none of these has a real,
- * live URL yet (no public repo URL, no hosted docs, no npm package). Do not invent one — replace
- * the value here once the real destination exists; nothing that reads LINKS needs to change.
+ * External and future-route destinations. `docs`, `playground`, and `github` are real, live
+ * values now — `docs`/`playground` are apps/docs and apps/playground's current real deployments
+ * (their Vercel-assigned URLs, not yet-live custom domains), and the GitHub repo is confirmed
+ * public. The rest are still `#`: no real URL exists yet for any of them (no CONTRIBUTING.md
+ * view, no issue template, no LICENSE blob link picked out). Do not invent one — replace the
+ * value here once the real destination exists; nothing that reads LINKS needs to change.
  */
 export const LINKS = {
-  /** Hosted docs, or this app's own /docs route once that's built out. */
-  docs: "#",
-  /** The public GitHub org/repo URL, once one exists. */
-  github: "#",
-  /** CONTRIBUTING.md (or a "good first issue" view), once the repo is public. */
+  /** apps/docs' own current real deployment. */
+  docs: "https://ferryline-docs.vercel.app/",
+  /** apps/playground's own current real deployment. */
+  playground: "https://playground-tau-beige.vercel.app/",
+  /** The public GitHub org/repo URL — confirmed real and live. */
+  github: "https://github.com/ferryline-labs/ferryline",
+  /** CONTRIBUTING.md (or a "good first issue" view) — the repo is public now, just no real URL
+   *  picked out here yet. */
   contributing: "#",
-  /** A pre-filled "open an issue" link, once the repo is public. */
+  /** A pre-filled "open an issue" link — same story as contributing above. */
   openIssue: "#",
   /** The LICENSE file, once it has a real URL to live at (e.g. the GitHub repo's blob view). */
   license: "#",

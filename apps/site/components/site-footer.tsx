@@ -4,7 +4,8 @@ import { LINKS } from "@/lib/content";
 import { Container, GridOverlay } from "@ferryline/ui";
 
 const FOOTER_LINKS = [
-  { label: "Docs", href: LINKS.docs },
+  { label: "Docs", href: LINKS.docs, external: true },
+  { label: "Playground", href: LINKS.playground, external: true },
   { label: "GitHub", href: LINKS.github, external: true },
   { label: "Contributing", href: LINKS.contributing },
   { label: "License (Apache-2.0)", href: LINKS.license },
