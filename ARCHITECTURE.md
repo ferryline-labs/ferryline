@@ -521,9 +521,10 @@ found along the way, in [contracts/router/TESTNET_DEPLOYMENT.md](contracts/route
 (`packages/relayer/docker-compose.yml`); confirmed to actually run and respond correctly to a real
 inbound transfer during this project's own verification work, not merely to build.
 
-**Widget:** not yet published as a versioned npm package; the source is real, tested, and merged.
-Real end-to-end proof (real Freighter signature, real broadcast, real destination-chain delivery)
-recorded in
+**Widget:** published to npm as `@ferryline/widget`, currently `0.1.1` (`0.1.0` shipped a real
+Node-ESM import bug for consumers outside a bundler, fixed same-day, see
+[packages/widget/CHANGELOG.md](packages/widget/CHANGELOG.md)). Real end-to-end proof (real
+Freighter signature, real broadcast, real destination-chain delivery) recorded in
 [packages/core/verified/experiments/2026-09-12-widget-e2e-real-browser-wallet.md](packages/core/verified/experiments/2026-09-12-widget-e2e-real-browser-wallet.md).
 
 **Nothing described here is on mainnet yet.** All real transactions above are Stellar testnet;
