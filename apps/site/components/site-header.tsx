@@ -9,7 +9,8 @@ import { Button, Container } from "@ferryline/ui";
 import { FOCUS_RING, cx } from "@ferryline/ui/styles";
 
 const NAV_LINKS = [
-  { label: "Docs", href: LINKS.docs },
+  { label: "Docs", href: LINKS.docs, external: true },
+  { label: "Playground", href: LINKS.playground, external: true },
   { label: "GitHub", href: LINKS.github, external: true },
   { label: "Contributing", href: LINKS.contributing },
 ] as const;

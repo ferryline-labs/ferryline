@@ -9,11 +9,11 @@ describe("PlaygroundHeader", () => {
 
     expect(screen.getByRole("link", { name: /Ferryline.*Playground/s })).toHaveAttribute(
       "href",
-      "https://ferryline.dev",
+      "https://ferryline-site.vercel.app/",
     );
     expect(screen.getByRole("link", { name: "Docs" })).toHaveAttribute(
       "href",
-      "https://docs.ferryline.dev",
+      "https://ferryline-docs.vercel.app/",
     );
     const github = screen.getByRole("link", { name: "GitHub" });
     expect(github).toHaveAttribute("href", "https://github.com/ferryline-labs/ferryline");
