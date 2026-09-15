@@ -92,6 +92,12 @@ Five packages, three genuinely independent trust boundaries:
 3. **The router** is a thin, non-custodial dispatcher. It never holds funds between legs of a
    multi-leg call; each leg's rail contract moves funds directly from the payer.
 
+`apps/playground` is not a sixth trust boundary, it introduces no new custody or security actor,
+it is the real widget embedded and run against real testnet infrastructure (see
+[apps/playground/README.md](apps/playground/README.md)), with a protocol inspector panel surfacing
+the actual XDR/attestation/relayer traffic a transfer produces. It exists to prove the diagram
+above is real, not simulated, not to extend it.
+
 ## Package-by-package
 
 ### `@ferryline/core`
@@ -135,7 +141,7 @@ Owns three genuinely non-trivial primitives, each with its own dedicated test fi
 
 ### `@ferryline/sdk`
 
-Path: [packages/sdk](packages/sdk) · 95 tests.
+Path: [packages/sdk](packages/sdk) · 96 tests.
 
 ```ts
 // packages/sdk/src/index.ts (real, current shape)
@@ -243,7 +249,7 @@ pending ──(Iris attestation completes)──► attested ──(mint_and_for
 
 ### `@ferryline/widget`
 
-Path: [packages/widget](packages/widget) · 35 tests · a plain Web Component, no framework
+Path: [packages/widget](packages/widget) · 49 tests · a plain Web Component, no framework
 wrapper.
 
 `<ferryline-widget>` wires together, in one custom element: a real `Ferryline` SDK instance with
@@ -472,11 +478,11 @@ one is added, or is the transfer permanently stuck?).
 
 Four tools each package uses:
 
-- **Unit and component tests** (`vitest`, 289 passing across five TypeScript packages, four of them
-  money-moving code and one the public landing page) — the bulk of coverage, run against real
-  recorded fixtures (mainnet responses, real fixture-shaped test data) wherever a live network call
-  would otherwise be needed.
-- **Live-database integration tests** (relayer, 18 tests) — run against a real, disposable Postgres
+- **Unit and component tests** (`vitest`, 461 passing across nine TypeScript packages and apps:
+  `core`, `sdk`, `relayer`, `widget`, `ui`, and `design-tokens`, plus the `site`, `docs`, and
+  `playground` apps) — the bulk of coverage, run against real recorded fixtures (mainnet responses,
+  real fixture-shaped test data) wherever a live network call would otherwise be needed.
+- **Live-database integration tests** (relayer, 37 tests) — run against a real, disposable Postgres
   container (`docker compose up -d postgres`), not an in-memory stand-in, for the crash-recovery
   and spend-ceiling logic where that distinction actually matters.
 - **Property-based tests** (`proptest`, router's `pack_destination`) — round-trip and

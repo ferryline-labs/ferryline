@@ -165,24 +165,32 @@ one round of staleness in `README.md`/`ARCHITECTURE.md`'s own figures — and th
 verification and this one, Phase 7's real address-checksum fix added four more SDK tests without
 this page's own SDK count being updated either. So rather than repeat a number from another
 document (including an earlier version of this same page), every count below comes from actually
-running each package's real test suite, fresh, on 2026-09-14:
+running each package's real test suite, fresh, on 2026-09-15 — now including `@ferryline/ui` and
+`apps/playground`, both real and tested but missing from this table's own earlier version:
 
 | Package                           | Command                                            | Result                       |
 | --------------------------------- | -------------------------------------------------- | ---------------------------- |
 | `@ferryline/core`                 | `pnpm --filter @ferryline/core test`               | 60 tests passing (4 files)   |
-| `@ferryline/sdk`                  | `pnpm --filter @ferryline/sdk test`                | 95 tests passing (8 files)   |
+| `@ferryline/sdk`                  | `pnpm --filter @ferryline/sdk test`                | 96 tests passing (8 files)   |
 | `ferryline-relayer`               | `pnpm --filter ferryline-relayer test`             | 196 tests passing (17 files) |
-| `ferryline-relayer` (integration) | `pnpm --filter ferryline-relayer test:integration` | 37 tests passing (6 files)   |
-| `@ferryline/widget`               | `pnpm --filter @ferryline/widget test`             | 35 tests passing (4 files)   |
+| `ferryline-relayer` (integration) | `pnpm --filter ferryline-relayer test:integration` | 37 tests exist (6 files)     |
+| `@ferryline/widget`               | `pnpm --filter @ferryline/widget test`             | 49 tests passing (4 files)   |
+| `@ferryline/ui`                   | `pnpm --filter @ferryline/ui test`                 | 5 tests passing (1 file)     |
 | `@ferryline/design-tokens`        | `pnpm --filter @ferryline/design-tokens test`      | 16 tests passing (1 file)    |
-| `@ferryline/site`                 | `pnpm --filter @ferryline/site test`               | 14 tests passing (3 files)   |
-| `@ferryline/docs`                 | `pnpm --filter @ferryline/docs test`               | 2 tests passing (1 file)     |
+| `@ferryline/site`                 | `pnpm --filter @ferryline/site test`               | 9 tests passing (2 files)    |
+| `@ferryline/docs`                 | `pnpm --filter @ferryline/docs test`               | 3 tests passing (1 file)     |
+| `@ferryline/playground`           | `pnpm --filter @ferryline/playground test`         | 27 tests passing (7 files)   |
 | `ferryline-router`                | `cargo test` (`contracts/router`)                  | 32 tests passing             |
 
-That's **487 passing tests**, all independently re-run for this page, including the relayer's
-live-database integration tests — a real, disposable Postgres container was available this time
-(`docker compose up -d postgres`, see the [relayer page](/docs/relayer)), so all 37 were actually
-run, not estimated. One thing worth being precise about, disclosed rather than smoothed over:
+That's **530 tests total**, of which **493 were independently re-run and passing** for this page.
+The 37 relayer integration tests are marked "exist," not "passing," for this specific verification
+pass: no Docker daemon was available in the environment this page was last verified from
+(2026-09-15), so `test:integration` fails at container setup, not at the tests themselves — see the
+[relayer page](/docs/relayer) for how to run them with a real, disposable Postgres container. An
+earlier version of this page did have Docker available and reported all 37 actually passing; that
+was a real, honest result at the time, not a projection, it just isn't the state of the environment
+this verification pass ran from. Two things worth being precise about, disclosed rather than
+smoothed over:
 
 - **A real discrepancy in the project's own root docs, found while verifying an earlier version of
   this page, since fixed:** `README.md`'s and `ARCHITECTURE.md`'s headline figures were stale
@@ -192,6 +200,10 @@ run, not estimated. One thing worth being precise about, disclosed rather than s
   headline went stale. If a future phase adds tests without these three documents being updated
   together, treat that as the same class of gap this note exists to guard against, not something
   that can't happen again.
+- **`@ferryline/ui` and `apps/playground` were both missing from this table entirely** until this
+  pass, despite being real, tested packages already — the same class of staleness as a wrong
+  number, just by omission instead. Ten packages/apps have real test suites as of this writing; if
+  an eleventh is added without this table growing to match, that is the same gap recurring.
 
 ## Where to go next
 
