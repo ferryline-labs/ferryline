@@ -19,6 +19,12 @@ infra — is importable directly from `"@ferryline/sdk"`. There's no subpath to 
 comes along for free: the SDK re-exports every type and value from it that a normal integration
 touches.
 
+**ESM only** — `package.json` sets `"type": "module"` and the `exports` map has no `require`
+condition, so `require("@ferryline/sdk")` from a CommonJS file fails with
+`ERR_PACKAGE_PATH_NOT_EXPORTED` rather than working. This is a real, intentional choice (matching
+`@ferryline/core`/`@ferryline/widget`), not a bug — `import` it, or use dynamic `import()` from
+CommonJS if you're not ready to convert.
+
 ## `Ferryline`
 
 The facade. It holds no rail-specific logic itself — it routes a request to whichever registered
