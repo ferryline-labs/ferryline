@@ -13,11 +13,12 @@ its own Cargo workspace), `@ferryline/site` (the landing page you're probably re
 link on), `apps/docs` (the documentation site), and `apps/playground` (the real widget, embedded
 and run against real testnet infrastructure, with a protocol inspector panel). 530 automated tests
 currently exist across all ten (461 TypeScript passing in a plain environment, plus 37 relayer
-integration tests that need a live Postgres via Docker, plus 32 Rust). `@ferryline/core` and
-`@ferryline/sdk` are the only two published to npm so far, real, live, public (exact current
-versions: `npm view @ferryline/core version` / `npm view @ferryline/sdk version` — noted here as a
-command rather than a number specifically so this line can't go stale the way an earlier version of
-it did). Nothing is on mainnet yet. See
+integration tests that need a live Postgres via Docker, plus 32 Rust). `@ferryline/core`,
+`@ferryline/sdk`, and `@ferryline/widget` are published to npm, real, live, public (exact current
+versions: `npm view @ferryline/core version` / `npm view @ferryline/sdk version` /
+`npm view @ferryline/widget version` — noted here as commands rather than numbers specifically so
+this line can't go stale the way an earlier version of it did). `@ferryline/ui` and
+`@ferryline/design-tokens` are workspace-only for now, not published. Nothing is on mainnet yet. See
 [README.md](README.md) for what each package does and [ARCHITECTURE.md](ARCHITECTURE.md) for how
 they fit together technically. Publishing a package yourself? See
 [PUBLISHING.md](PUBLISHING.md) — there is exactly one correct way to do it, and the wrong way has
