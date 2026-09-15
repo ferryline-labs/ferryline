@@ -22,6 +22,10 @@
 //     destructive if anyone finds it in an installed copy and runs it, not just dead weight.
 //   - `record:usdt0-fixtures` / `record:cctp-fixtures` ("tsx scripts/record-*.ts"): fail —
 //     scripts/ isn't shipped, ERR_MODULE_NOT_FOUND on the referenced .ts file.
+//   - `prepublishOnly` (see ../../scripts/assert-pnpm-publish.mjs): points at a relative path
+//     (`../../scripts/...`) that only resolves from inside this monorepo checkout — meaningless
+//     (a broken path, not destructive) in an installed copy, same reasoning as prepack/postpack
+//     themselves getting stripped below.
 //
 // So: real scripts stay untouched in the real source package.json, forever — this only rewrites
 // the copy that gets packed, and puts the original back immediately afterward via `postpack`.
@@ -44,6 +48,7 @@ const NON_SHIPPABLE_SCRIPTS = [
   "clean",
   "record:usdt0-fixtures",
   "record:cctp-fixtures",
+  "prepublishOnly",
   "prepack",
   "postpack",
 ];

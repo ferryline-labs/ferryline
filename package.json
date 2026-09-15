@@ -16,7 +16,10 @@
     "lint": "eslint .",
     "format": "prettier --check .",
     "format:write": "prettier --write .",
-    "clean": "turbo run clean && rm -rf node_modules/.cache"
+    "clean": "turbo run clean && rm -rf node_modules/.cache",
+    "publish:core": "pnpm --filter @ferryline/core publish",
+    "publish:sdk": "pnpm --filter @ferryline/sdk publish",
+    "publish:widget": "pnpm --filter @ferryline/widget publish"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
