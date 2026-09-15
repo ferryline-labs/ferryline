@@ -141,12 +141,39 @@ async registerInboundTransfer(
 
 Unlike inbound, you don't call anything for outbound. Once the final step of an outbound
 (Stellar → EVM) transfer is signed, submitted, and its hash recorded, the widget automatically
-calls `@ferryline/sdk`'s `Ferryline.registerOutboundTransfer()` on your behalf — real source, from
-the widget's own `afterStepSubmitted`:
+calls `@ferryline/sdk`'s `Ferryline.registerOutboundTransfer()` on your behalf. The code below is
+the real, current body of `packages/widget/src/index.ts`'s own `afterStepSubmitted`, copied
+verbatim (only re-indented; its own inline comments are trimmed here — the full version explains
+the historical double-registration bug this exact `isFinalStep` check exists to prevent, the
+deliberate delay before the deferred step, and the request-generation staleness guard, see that
+method's own doc comment in the real file for the complete story). `isFinalStep` is imported from
+`@ferryline/sdk` — the same canonical helper documented on the
+[SDK Reference](/docs/sdk-reference#isfinalstep) page — this file does not hand-roll its own
+version of that comparison:
 
 ```ts
-if (isFinalStep(built, stepIndex)) {
-  await this.client().ferryline.registerOutboundTransfer(built.transferId);
+if (!isFinalStep(built, stepIndex)) {
+  const nextIndex = stepIndex + 1;
+  this.setPhaseIfCurrent(
+    signedAwaitingNextStep({ quote, built, stepIndex: nextIndex }),
+    generation,
+  );
+  // [comment trimmed — see the real source for the full explanation]
+  await new Promise((resolve) =>
+    setTimeout(resolve, this.testPostApproveBuildDelayMsOverride ?? POST_APPROVE_BUILD_DELAY_MS),
+  );
+  const nextStep = await this.client().ferryline.prepareStep(built.transferId, nextIndex);
+  const rebuilt = {
+    ...built,
+    steps: built.steps.map((s, i) => (i === nextIndex ? nextStep : s)),
+  };
+  this.setPhaseIfCurrent(buildSucceeded(quote, rebuilt, nextIndex), generation);
+  return;
+}
+// [comment trimmed — see the real source for the full explanation]
+const registrationResult = await this.client().ferryline.registerOutboundTransfer(built.transferId);
+if (generation === this.#requestGeneration) {
+  this.#outboundRegistrationResult = registrationResult;
 }
 ```
 
