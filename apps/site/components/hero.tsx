@@ -2,10 +2,8 @@ import type { ReactElement } from "react";
 
 import { LINKS } from "@/lib/content";
 
-import { Button } from "./ui/button";
-import { Container } from "./ui/container";
-import { Mono } from "./ui/mono";
-import { Reveal } from "./ui/reveal";
+import { Button, Container, Mono, Reveal } from "@ferryline/ui";
+
 import { TransferPreview } from "./transfer-preview";
 
 /**

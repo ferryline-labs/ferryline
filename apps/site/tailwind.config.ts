@@ -40,7 +40,13 @@ import {
 // `fontFamily`, `keyframes`/`animation`, and the actual `theme`/`extend` shape — only the raw
 // values moved out.
 const config: Config = {
-  content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}"],
+  // `../../packages/ui/dist/**/*.js`: @ferryline/ui ships component logic, not compiled CSS — its
+  // real Tailwind utility class name strings only exist inside its own compiled bundle, and
+  // Tailwind's JIT scanner only generates CSS for classes it can actually find in a `content`
+  // glob. Without this, every class used exclusively inside a @ferryline/ui component (nothing
+  // that also happens to appear verbatim in this app's own source) would silently be missing from
+  // the generated CSS — no build error, just unstyled output.
+  content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}", "../../packages/ui/dist/**/*.js"],
   theme: {
     // Webflow's own default breakpoints (max-width, desktop-first) — listed widest-to-narrowest
     // so a later, narrower rule wins the cascade the way a desktop-first stylesheet does.

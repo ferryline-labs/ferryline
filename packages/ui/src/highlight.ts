@@ -1,8 +1,8 @@
 /**
- * Minimal keyword highlighting for the live-demo code blocks. Deliberately not a real syntax
- * highlighter (one dependency, a grammar, a theme) for three static, hand-written snippets — a
- * plain keyword split covers the one thing the design system asks for: language keywords in
- * `accent`, everything else in the surrounding ink tone.
+ * Minimal keyword highlighting for code blocks. Deliberately not a real syntax highlighter (one
+ * dependency, a grammar, a theme) for static, hand-written snippets — a plain keyword split covers
+ * the one thing the design system asks for: language keywords in `accent`, everything else in the
+ * surrounding ink tone.
  */
 
 export interface CodeSegment {

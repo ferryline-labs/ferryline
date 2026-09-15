@@ -4,10 +4,9 @@ import Link from "next/link";
 import { type ReactElement, useId, useState } from "react";
 
 import { LINKS } from "@/lib/content";
-import { FOCUS_RING, cx } from "@/lib/styles";
 
-import { Button } from "./ui/button";
-import { Container } from "./ui/container";
+import { Button, Container } from "@ferryline/ui";
+import { FOCUS_RING, cx } from "@ferryline/ui/styles";
 
 const NAV_LINKS = [
   { label: "Docs", href: LINKS.docs },

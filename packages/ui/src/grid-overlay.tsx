@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 
-import { cx } from "@/lib/styles";
+import { cx } from "./styles.js";
 
 /**
  * "The single biggest reason the page reads as designed rather than assembled" — a full-viewport,

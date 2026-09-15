@@ -1,8 +1,7 @@
 import type { ReactElement, ReactNode } from "react";
 
-import { cx } from "@/lib/styles";
-
-import { Container } from "./container";
+import { Container } from "./container.js";
+import { cx } from "./styles.js";
 
 interface SectionProps {
   id?: string;
@@ -27,6 +26,14 @@ const TONE_CLASSES = {
  * `.section-padding { padding-block: 4.25rem }` (68px), stepping to `3.125rem` (50px) at
  * `≤767px` — fixed rem, not fluid, exactly as the doc's own stylesheet has it (the doc is
  * explicit that this one, unlike the type ramp, is a breakpoint step, not a clamp()).
+ *
+ * Consumer requirement: this uses the `mobile-landscape:` variant, a custom breakpoint name (not
+ * one of Tailwind's own defaults) defined in apps/site's own `tailwind.config.ts` `screens`
+ * (`{ max: "767px" }`). Any app consuming @ferryline/ui — apps/playground included — needs that
+ * same `screens` entry in its own tailwind.config.ts, the same way it needs
+ * @ferryline/design-tokens' colors/radius/spacing: this package ships component *logic*, not
+ * compiled CSS, so the consuming app's own Tailwind config is what actually generates the classes
+ * these components reference.
  */
 export function Section({ id, className, children, tone = "surface" }: SectionProps): ReactElement {
   return (

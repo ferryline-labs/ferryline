@@ -3,14 +3,9 @@
 import { type KeyboardEvent, type ReactElement, useState } from "react";
 
 import { EXAMPLE_TRANSFER, TRACK_STAGES } from "@/lib/content";
-import { FOCUS_RING, cx } from "@/lib/styles";
 
-import { Card } from "./ui/card";
-import { CodeBlock } from "./ui/code-block";
-import { Reveal } from "./ui/reveal";
-import { Section } from "./ui/section";
-import { SectionHeader } from "./ui/section-header";
-import { Stepper } from "./ui/stepper";
+import { Card, CodeBlock, Reveal, Section, SectionHeader, Stepper } from "@ferryline/ui";
+import { FOCUS_RING, cx } from "@ferryline/ui/styles";
 
 interface Tab {
   id: string;

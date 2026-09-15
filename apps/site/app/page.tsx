@@ -5,7 +5,7 @@ import { LiveDemo } from "@/components/live-demo";
 import { OpenSourceSection } from "@/components/open-source-section";
 import { RailsSection } from "@/components/rails-section";
 import { RouteArchitecture } from "@/components/route-architecture";
-import { GridOverlay } from "@/components/ui/grid-overlay";
+import { GridOverlay } from "@ferryline/ui";
 import { VerifiedSection } from "@/components/verified-section";
 import { WhySection } from "@/components/why-section";
 

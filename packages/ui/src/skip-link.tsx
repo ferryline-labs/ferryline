@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 
-import { FOCUS_RING, cx } from "@/lib/styles";
+import { cx, FOCUS_RING } from "./styles.js";
 
 /** Visually hidden until focused — the first tab stop on every page. */
 export function SkipLink(): ReactElement {

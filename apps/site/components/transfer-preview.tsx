@@ -3,9 +3,8 @@
 import type { ReactElement } from "react";
 
 import { EXAMPLE_TRANSFER } from "@/lib/content";
+import { Card, Reveal } from "@ferryline/ui";
 
-import { Card } from "./ui/card";
-import { Reveal } from "./ui/reveal";
 import { useTransferAmounts } from "./ui/transfer-flow";
 
 const AMOUNT = parseFloat(EXAMPLE_TRANSFER.amount);

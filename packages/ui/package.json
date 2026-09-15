@@ -1,0 +1,46 @@
+{
+  "name": "@ferryline/ui",
+  "version": "0.0.0",
+  "description": "Ferryline's shared React UI primitives (Section, Card, CodeBlock, Stepper, ...), built on @ferryline/design-tokens — extracted from apps/site so apps/site, apps/docs, and apps/playground share one component source instead of drifting, the same reason @ferryline/design-tokens itself exists.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./styles": {
+      "types": "./dist/styles.d.ts",
+      "import": "./dist/styles.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "clean": "rm -rf dist .turbo"
+  },
+  "dependencies": {
+    "@ferryline/design-tokens": "workspace:*"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "happy-dom": "^20.14.3",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "vitest": "^5.0.0"
+  },
+  "peerDependencies": {
+    "react": "^19.3.0"
+  }
+}

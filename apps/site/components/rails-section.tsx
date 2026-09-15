@@ -1,11 +1,6 @@
 import type { ReactElement } from "react";
 
-import { Badge } from "./ui/badge";
-import { Card } from "./ui/card";
-import { Mono } from "./ui/mono";
-import { Reveal } from "./ui/reveal";
-import { Section } from "./ui/section";
-import { SectionHeader } from "./ui/section-header";
+import { Badge, Card, Mono, Reveal, Section, SectionHeader } from "@ferryline/ui";
 
 interface Rail {
   key: string;

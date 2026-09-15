@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 
-import { cx } from "@/lib/styles";
+import { cx } from "./styles.js";
 
 interface StepperProps {
   steps: readonly string[];

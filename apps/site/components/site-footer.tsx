@@ -1,9 +1,7 @@
 import type { ReactElement } from "react";
 
 import { LINKS } from "@/lib/content";
-
-import { Container } from "./ui/container";
-import { GridOverlay } from "./ui/grid-overlay";
+import { Container, GridOverlay } from "@ferryline/ui";
 
 const FOOTER_LINKS = [
   { label: "Docs", href: LINKS.docs },

@@ -1,9 +1,6 @@
 import type { ReactElement } from "react";
 
-import { Card } from "./ui/card";
-import { Mono } from "./ui/mono";
-import { Reveal } from "./ui/reveal";
-import { Section } from "./ui/section";
+import { Card, Mono, Reveal, Section } from "@ferryline/ui";
 
 function ComparisonCard(): ReactElement {
   return (

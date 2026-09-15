@@ -2,9 +2,10 @@ import type { Metadata, Viewport } from "next";
 import { Space_Grotesk, Space_Mono } from "next/font/google";
 import type { ReactElement, ReactNode } from "react";
 
+import { SkipLink } from "@ferryline/ui";
+
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
-import { SkipLink } from "@/components/ui/skip-link";
 
 import "./globals.css";
 

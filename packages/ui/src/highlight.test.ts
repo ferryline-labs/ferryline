@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { highlightCode } from "./highlight";
+import { highlightCode } from "./highlight.js";
 
 describe("highlightCode", () => {
   it("flags bare-word keywords and leaves everything else untouched", () => {

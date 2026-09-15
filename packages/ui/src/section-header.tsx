@@ -1,6 +1,6 @@
 import type { ReactElement, ReactNode } from "react";
 
-import { Reveal } from "./reveal";
+import { Reveal } from "./reveal.js";
 
 interface SectionHeaderProps {
   title: ReactNode;
@@ -13,6 +13,11 @@ interface SectionHeaderProps {
  * justify-content:space-between; gap:32px 20px`, title in `.max-6-col` (690px), a supporting
  * paragraph ~335px wide, bottom-aligned against the title. Built once, reused everywhere, per the
  * doc's own build-order note ("this repeats in *every* section — build it once").
+ *
+ * Consumer requirement (same shape as Section's own note): `max-w-6-col` is a custom maxWidth key
+ * (apps/site's own tailwind.config.ts `extend.maxWidth: { "6-col": "690px" }`), not a Tailwind
+ * default and not part of @ferryline/design-tokens. Any consuming app needs this same maxWidth
+ * extension in its own tailwind.config.ts for this cap to actually apply.
  */
 export function SectionHeader({ title, description, eyebrow }: SectionHeaderProps): ReactElement {
   return (

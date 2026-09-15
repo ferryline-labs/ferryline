@@ -1,8 +1,7 @@
 import type { ReactElement, ReactNode } from "react";
 
-import { cx } from "@/lib/styles";
-
-import { StarBorder } from "./star-border";
+import { cx } from "./styles.js";
+import { StarBorder } from "./star-border.js";
 
 type CardTone = "surface" | "dark";
 

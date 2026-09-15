@@ -1,6 +1,6 @@
 import type { ReactElement, ReactNode } from "react";
 
-import { cx } from "@/lib/styles";
+import { cx } from "./styles.js";
 
 interface ContainerProps {
   children: ReactNode;

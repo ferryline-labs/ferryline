@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 
-import { highlightCode } from "@/lib/highlight";
+import { highlightCode } from "./highlight.js";
 
 interface CodeBlockProps {
   code: string;
