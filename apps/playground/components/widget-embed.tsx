@@ -84,7 +84,13 @@ export function WidgetEmbed(): ReactElement {
   };
 
   return (
-    <Card>
+    // overflow-y-auto: same fix as InspectorPanel's own Card (see that file's comment) — Card's
+    // h-full is wrapped in StarBorder's overflow-hidden (needed there to clip the glow to the
+    // card's rounded corners), so content taller than the card — the full review table, the
+    // wallet-selector list — was being silently clipped there, before the page-level wrapper's own
+    // scroll area ever saw it. Confirmed live: "Fee"/"Confirm and sign" were unreachable by
+    // scrolling the outer wrapper alone; this is the actual boundary that needs to scroll.
+    <Card className="overflow-y-auto">
       <div className="flex items-center justify-between gap-2">
         <p className="text-text-4 uppercase text-on-surface-weak">Start a transfer</p>
         <Badge>USDC via CCTP</Badge>

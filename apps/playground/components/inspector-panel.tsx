@@ -135,7 +135,12 @@ export function InspectorPanel(): ReactElement {
   const mostRecentSectionId = findMostRecentSectionId(sections);
 
   return (
-    <Card>
+    // overflow-y-auto here, not just on the page-level wrapper around this component: Card's own
+    // h-full is wrapped in StarBorder's overflow-hidden (needed there to clip the glow to the
+    // card's rounded corners) — content taller than the card was getting silently clipped by that
+    // *before* it ever reached the page wrapper's own scroll area. Scrolling has to happen inside
+    // that boundary, on the actual content box, which is exactly what Card's className prop reaches.
+    <Card className="overflow-y-auto">
       {/* Light Card wrapping dark CodeBlock content — the same "code on a black panel inside a
           light card" contrast live-demo.tsx's own StatusPanel already establishes, not a new
           "dark card holding dark code blocks" look that would leave every event indistinguishable
