@@ -11,10 +11,14 @@ Seven real, tested packages: `@ferryline/core`, `@ferryline/sdk`, `ferryline-rel
 dependency of its own), `ferryline-router` (a Soroban contract, its own Cargo workspace), and
 `@ferryline/site` (the landing page you're probably reading this from a link on). 337 automated
 tests currently pass across all seven (305 TypeScript, 32 Rust). `@ferryline/core` and
-`@ferryline/sdk` are the only two published to npm so far (both at `0.1.0`, real, live, public).
-Nothing is on mainnet yet. See
+`@ferryline/sdk` are the only two published to npm so far, real, live, public (exact current
+versions: `npm view @ferryline/core version` / `npm view @ferryline/sdk version` — noted here as a
+command rather than a number specifically so this line can't go stale the way an earlier version of
+it did). Nothing is on mainnet yet. See
 [README.md](README.md) for what each package does and [ARCHITECTURE.md](ARCHITECTURE.md) for how
-they fit together technically.
+they fit together technically. Publishing a package yourself? See
+[PUBLISHING.md](PUBLISHING.md) — there is exactly one correct way to do it, and the wrong way has
+already shipped one broken release for real.
 
 ## The one standard that matters more than any other: verify, don't assume
 

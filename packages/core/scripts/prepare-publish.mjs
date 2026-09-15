@@ -20,6 +20,10 @@
 //   - `clean` ("rm -rf dist .turbo"): the most important one to catch — this one does NOT fail,
 //     it actually runs and deletes the installed package's own dist/ directory. Silently
 //     destructive if anyone finds it in an installed copy and runs it, not just dead weight.
+//   - `prepublishOnly` (see ../../scripts/assert-pnpm-publish.mjs): points at a relative path
+//     (`../../scripts/...`) that only resolves from inside this monorepo checkout — meaningless
+//     (a broken path, not destructive) in an installed copy, same reasoning as prepack/postpack
+//     themselves getting stripped below.
 //
 // So: real scripts stay untouched in the real source package.json, forever — this only rewrites
 // the copy that gets packed, and puts the original back immediately afterward via `postpack`.
@@ -35,7 +39,15 @@ const backupPath = `${packageJsonPath}.publish-backup`;
 // themselves are included here too: they're this exact publish-prep mechanism, meaningful only
 // while pnpm is assembling the tarball from the real source checkout — equally dead weight (though
 // not destructive) in an installed copy, so they get stripped from what ships the same as the rest.
-const NON_SHIPPABLE_SCRIPTS = ["build", "typecheck", "test", "clean", "prepack", "postpack"];
+const NON_SHIPPABLE_SCRIPTS = [
+  "build",
+  "typecheck",
+  "test",
+  "clean",
+  "prepublishOnly",
+  "prepack",
+  "postpack",
+];
 
 const mode = process.argv[2];
 if (mode === "strip") {

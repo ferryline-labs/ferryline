@@ -29,6 +29,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "clean": "rm -rf dist .turbo",
+    "prepublishOnly": "node ../../scripts/assert-pnpm-publish.mjs",
     "prepack": "node scripts/prepare-publish.mjs strip",
     "postpack": "node scripts/prepare-publish.mjs restore"
   },

@@ -32,6 +32,7 @@
     "clean": "rm -rf dist .turbo",
     "record:usdt0-fixtures": "tsx scripts/record-usdt0-mainnet-fixtures.ts",
     "record:cctp-fixtures": "tsx scripts/record-cctp-mainnet-fixtures.ts",
+    "prepublishOnly": "node ../../scripts/assert-pnpm-publish.mjs",
     "prepack": "node scripts/prepare-publish.mjs strip",
     "postpack": "node scripts/prepare-publish.mjs restore"
   },
