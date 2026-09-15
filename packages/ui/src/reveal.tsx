@@ -9,7 +9,7 @@ import {
   useState,
 } from "react";
 
-import { cx } from "@/lib/styles";
+import { cx } from "./styles.js";
 
 type RevealVariant = "line" | "card" | "up";
 

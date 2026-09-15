@@ -699,7 +699,7 @@ export class FerrylineWidget extends HTMLElement {
             <div part="wallet-connect">
               ${
                 this.#connected
-                  ? `<div class="row"><span class="row-label">Connected</span><span class="row-value">${escapeHtml(this.#connected.address)}</span></div>`
+                  ? `<div class="row"><span class="row-label">Connected</span><span class="row-value" title="${escapeHtml(this.#connected.address)}">${escapeHtml(truncateAddress(this.#connected.address))}</span></div>`
                   : renderWalletModules(this.wallet())
               }
             </div>
@@ -792,6 +792,21 @@ function escapeHtml(text: string): string {
     .replace(/"/g, "&quot;");
 }
 
+/**
+ * Shortens a long chain address for display (a real Stellar `G...` address is 56 characters — even
+ * at this row's own generous width, it wraps across several lines rather than fitting on one; a
+ * real EVM `0x...` address, 42 characters, is shorter but still awkward in a narrow card). Never
+ * used for anything the caller actually acts on programmatically — every real call site that needs
+ * the full value (signing, submission, the `title` attribute below for hover/copy verification)
+ * keeps using the untruncated address; this exists purely for this one line's own rendered text.
+ */
+function truncateAddress(address: string, headLength = 8, tailLength = 6): string {
+  if (address.length <= headLength + tailLength + 3) {
+    return address; // already short enough that truncating would save no real space.
+  }
+  return `${address.slice(0, headLength)}...${address.slice(-tailLength)}`;
+}
+
 function renderFaucets(): string {
   const links = TESTNET_FAUCETS.map(
     (f) => `<a part="faucet-link" href="${f.url}" target="_blank" rel="noopener">${f.label}</a>`,
@@ -833,7 +848,7 @@ function renderSummary(summary: PreviewSummary): string {
       </div>
       <div class="row">
         <span class="row-label">Destination</span>
-        <span class="row-value">${escapeHtml(summary.destination)}</span>
+        <span class="row-value" title="${escapeHtml(summary.destination)}">${escapeHtml(truncateAddress(summary.destination))}</span>
       </div>
       ${summary.fees
         .map(

@@ -1,6 +1,10 @@
 /**
  * Shared style primitives, kept in one place so a design-system rule (the focus ring, the
  * technical-identifier treatment) is defined once and reused, not re-typed per component.
+ *
+ * Moved here from apps/site/lib/styles.ts (unchanged) when @ferryline/ui was extracted, so
+ * apps/site, apps/docs, and apps/playground share one focus-ring/class-join implementation instead
+ * of each redefining it — the same reason @ferryline/design-tokens itself exists.
  */
 
 /**

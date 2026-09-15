@@ -1,8 +1,8 @@
 {
-  "name": "@ferryline/site",
+  "name": "@ferryline/playground",
   "version": "0.0.0",
   "private": true,
-  "description": "Ferryline's public landing page and (later) docs, built on Next.js App Router.",
+  "description": "The real <ferryline-widget> embedded on its own page (playground.ferryline.dev): testnet CCTP, with a real protocol inspector showing the actual XDR/attestation/relayer calls as they happen.",
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {
@@ -15,19 +15,21 @@
   },
   "dependencies": {
     "@ferryline/design-tokens": "workspace:*",
+    "@ferryline/sdk": "workspace:*",
     "@ferryline/ui": "workspace:*",
+    "@ferryline/widget": "workspace:*",
     "next": "^16.3.5",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.3",
-    "@vitejs/plugin-react": "^6.1.1",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",
     "@testing-library/user-event": "^14.6.7",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
     "happy-dom": "^20.14.3",
     "tailwindcss": "^4.3.3",
     "typescript": "^5.9.3",

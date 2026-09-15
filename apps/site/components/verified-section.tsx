@@ -1,8 +1,6 @@
 import type { ReactElement } from "react";
 
-import { Reveal } from "./ui/reveal";
-import { Section } from "./ui/section";
-import { StarBorder } from "./ui/star-border";
+import { Reveal, Section, StarBorder } from "@ferryline/ui";
 
 const FINDINGS = [
   "CCTP's hook data isn't a 32-byte address the way it looks. It's a length-prefixed string. Assuming otherwise would have permanently stranded funds.",

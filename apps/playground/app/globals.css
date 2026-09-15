@@ -1,0 +1,37 @@
+@import "tailwindcss";
+@config "../tailwind.config.ts";
+
+@layer base {
+  * {
+    /* The one border color used site-wide (see apps/site's own tailwind.config.ts note) — so any
+       element that turns on a border via a plain `border` utility gets the right one automatically. */
+    @apply border-on-surface-weaker;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    overflow-x: hidden;
+  }
+
+  body {
+    @apply bg-white font-sans text-on-surface-dark antialiased;
+  }
+
+  ::selection {
+    @apply bg-brand text-on-brand;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

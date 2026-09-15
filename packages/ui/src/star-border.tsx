@@ -1,6 +1,6 @@
 import type { CSSProperties, ReactElement, ReactNode } from "react";
 
-import { cx } from "@/lib/styles";
+import { cx } from "./styles.js";
 
 interface StarBorderProps {
   children: ReactNode;
@@ -32,6 +32,11 @@ interface StarBorderProps {
  * the original snippet's own literal value, and the keyframe/animation names
  * (`star-movement-top`/`star-movement-bottom`) match the snippet's own names exactly, not a
  * shortened version of them.
+ *
+ * Consumer requirement: `animate-star-movement-top`/`-bottom` reference keyframes/animations
+ * defined in apps/site's own tailwind.config.ts (`extend.keyframes`/`extend.animation`), not
+ * Tailwind defaults and not part of @ferryline/design-tokens — any consuming app needs the same
+ * two keyframe/animation entries for the glow to actually move.
  *
  * The two deliberate, necessary departures from the snippet, both because this wraps arbitrary
  * card content instead of owning a self-contained button — a literal, fully self-contained port

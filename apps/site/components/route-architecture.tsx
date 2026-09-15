@@ -1,10 +1,8 @@
 import type { ReactElement } from "react";
 
+import { Card, Reveal, Section, SectionHeader } from "@ferryline/ui";
+
 import { RelayerIcon, RouterIcon, SdkIcon, WidgetIcon } from "./route-icons";
-import { Card } from "./ui/card";
-import { Reveal } from "./ui/reveal";
-import { Section } from "./ui/section";
-import { SectionHeader } from "./ui/section-header";
 
 interface Stop {
   name: string;

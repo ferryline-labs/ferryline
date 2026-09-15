@@ -150,8 +150,19 @@ a:focus-visible {
   @apply mt-1 break-all rounded-xs bg-on-surface-muted p-3 text-xs text-on-surface-weak;
 }
 
+/* Base layout only — NOT the grid itself. `[part="wallet-connect"]` renders one of two genuinely
+   different things (see index.ts's own confirmAndSign/renderWalletModules): a real GRID of wallet
+   picker buttons when no wallet is connected yet, or a single, full-width "Connected" summary `.row`
+   once one is. Putting `grid-cols-2` directly on this container (an earlier version of this rule)
+   squeezed that single `.row` into one 50%-width grid cell too, producing the coincidentally-narrow,
+   centered-looking box a real screenshot caught — the grid below is scoped to the button list
+   specifically so the "Connected" row is never subject to it at all. */
 [part="wallet-connect"] {
-  @apply my-2 flex flex-col gap-2;
+  @apply my-2;
+}
+
+[part="wallet-connect"]:has([part="wallet-module-button"]) {
+  @apply grid grid-cols-2 gap-2;
 }
 
 /* Mobile bottom-sheet layout (STEP 2D, preserved from the pre-restyle mechanism): below the

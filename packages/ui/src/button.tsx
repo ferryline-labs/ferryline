@@ -1,6 +1,6 @@
 import type { ReactElement, ReactNode } from "react";
 
-import { FOCUS_RING, cx } from "@/lib/styles";
+import { cx, FOCUS_RING } from "./styles.js";
 
 type ButtonVariant = "brand" | "dark" | "light";
 
@@ -19,7 +19,7 @@ interface ButtonProps {
 // (never a separate always-on base class) so two border-color utilities never compete on one
 // element — the same "one Record lookup, not concatenated classes" rule Card already follows.
 //
-// `on-brand` is white, not the doc's literal black — see the file-level comment in
+// `on-brand` is white, not the doc's literal black — see the file-level comment in apps/site's
 // tailwind.config.ts. `px-5` (20px) is the doc's own literal horizontal padding; `py-3` (12px,
 // not the doc's own 10px) is this project's own correction so the button clears its 44px
 // accessibility floor — text-3's baked-in 21.12px line-height plus 10px padding renders at
@@ -40,9 +40,9 @@ const RIPPLE = "bg-gray-300";
  * here only ever move a fill or opacity, never the box.
  *
  * `rounded-lg` (20px), not the doc's own literal `rounded` (10px) — a direct request for more
- * corner rounding. It also happens to fix a real mismatch: the nav's pill container is
- * `rounded-lg` too (see site-header.tsx), so a button at the doc's default 10px sat noticeably
- * less rounded than the pill around it; matching radii here removes that clash entirely.
+ * corner rounding. It also happens to fix a real mismatch: apps/site's nav pill container is
+ * `rounded-lg` too, so a button at the doc's default 10px sat noticeably less rounded than the
+ * pill around it; matching radii here removes that clash entirely.
  */
 export function Button({
   href,

@@ -1,6 +1,6 @@
 import type { ReactElement, ReactNode } from "react";
 
-import { FOCUS_RING, cx } from "@/lib/styles";
+import { FOCUS_RING, cx } from "@ferryline/ui/styles";
 
 interface TextLinkProps {
   href: string;
