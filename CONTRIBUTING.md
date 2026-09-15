@@ -6,11 +6,14 @@ you don't have to reverse-engineer the project's own standards from its git hist
 
 ## What this project actually is right now
 
-Seven real, tested packages: `@ferryline/core`, `@ferryline/sdk`, `ferryline-relayer`,
-`@ferryline/widget`, `@ferryline/design-tokens` (shared design-token values, no framework
-dependency of its own), `ferryline-router` (a Soroban contract, its own Cargo workspace), and
-`@ferryline/site` (the landing page you're probably reading this from a link on). 337 automated
-tests currently pass across all seven (305 TypeScript, 32 Rust). `@ferryline/core` and
+Ten real, tested packages and apps: `@ferryline/core`, `@ferryline/sdk`, `ferryline-relayer`,
+`@ferryline/widget`, `@ferryline/ui` (shared React components), `@ferryline/design-tokens` (shared
+design-token values, no framework dependency of its own), `ferryline-router` (a Soroban contract,
+its own Cargo workspace), `@ferryline/site` (the landing page you're probably reading this from a
+link on), `apps/docs` (the documentation site), and `apps/playground` (the real widget, embedded
+and run against real testnet infrastructure, with a protocol inspector panel). 530 automated tests
+currently exist across all ten (461 TypeScript passing in a plain environment, plus 37 relayer
+integration tests that need a live Postgres via Docker, plus 32 Rust). `@ferryline/core` and
 `@ferryline/sdk` are the only two published to npm so far, real, live, public (exact current
 versions: `npm view @ferryline/core version` / `npm view @ferryline/sdk version` — noted here as a
 command rather than a number specifically so this line can't go stale the way an earlier version of
@@ -63,7 +66,7 @@ Requirements: Node 22.12+ (CI uses 24), pnpm 11, Rust stable with the `wasm32v1-
 
 ```sh
 pnpm build            # turbo: builds every TypeScript package in dependency order
-pnpm test             # vitest in every package (305 TypeScript tests as of this writing)
+pnpm test             # vitest in every package (461 TypeScript tests as of this writing, excludes relayer integration)
 pnpm typecheck
 pnpm lint             # eslint, zero errors expected
 pnpm format           # prettier --check, zero violations expected

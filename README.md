@@ -13,11 +13,12 @@ and Circle's Iris attestation service for CCTP, and, for USDT0, a real first-par
 (Stellar → Arbitrum, since USDT0 has no Stellar testnet deployment to test against — see
 [FAQ](apps/docs/content/docs/faq.mdx) for why). That one real transaction is not the same claim as
 "production-ready on mainnet": the CCTP rail and the Soroban router remain testnet-only, and no
-formal security review has happened yet. This is not a scaffold or a design document: 487
-automated tests currently pass across eight packages (60 core, 95 SDK, 196 relayer unit tests + 37
-live-database integration tests, 35 widget, 16 design-tokens, 32 Soroban contract, 14 site, 2
-docs), and several real, on-chain transaction hashes are recorded and independently checkable right
-now, not merely claimed. See
+formal security review has happened yet. This is not a scaffold or a design document: 530
+automated tests exist across ten packages and apps (60 core, 96 SDK, 196 relayer unit tests + 37
+live-database integration tests, 49 widget, 5 UI, 16 design-tokens, 32 Soroban contract, 9 site, 3
+docs, 27 playground); 493 of those run in a plain environment without a Docker daemon, and all 493
+currently pass, and several real, on-chain transaction hashes are recorded and independently
+checkable right now, not merely claimed. See
 [Verified facts and honest gaps](#verified-facts-and-honest-gaps) below for exactly what's been
 proven versus what's still open, and [ARCHITECTURE.md](ARCHITECTURE.md) for a full technical
 write-up of how every piece actually works.
@@ -36,16 +37,23 @@ support into one integration.
 
 ## What we build
 
-Six pieces, each independently useful, and stronger together.
+Seven pieces, each independently useful, and stronger together (plus three smaller supporting
+packages/apps — `@ferryline/ui`, `@ferryline/design-tokens`, and `apps/docs` — described in their
+own READMEs rather than repeated at length here).
 
 | Package             | Path                                 | What it actually is                                                                                                                                                                          | Real tests |
 | ------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
 | `@ferryline/core`   | [packages/core](packages/core)       | Shared, network-free types and utilities every other package depends on.                                                                                                                     | 60         |
-| `@ferryline/sdk`    | [packages/sdk](packages/sdk)         | One TypeScript interface for both rails: `quote → build → sign → track`. Returns unsigned XDR, so it works with any wallet.                                                                  | 83         |
-| `ferryline-relayer` | [packages/relayer](packages/relayer) | A real, running Fastify + PostgreSQL service that completes inbound (EVM → Stellar) CCTP delivery on the sender's behalf.                                                                    | 98 + 18    |
-| `@ferryline/widget` | [packages/widget](packages/widget)   | A real, framework-agnostic `<ferryline-widget>` custom element wiring the SDK, a real wallet-kit session, and a transaction preview into one drop-in UI.                                     | 34         |
-| `ferryline-router`  | [contracts/router](contracts/router) | A real, deployed Soroban contract so vaults, payroll, and escrow contracts can send cross-chain in a single call, including atomic multi-leg batches.                                        | 29         |
-| `@ferryline/site`   | [apps/site](apps/site)               | The public landing page (Next.js App Router). Built on real content only: code samples matching the SDK's actual API, and a verification log citing this project's own real, dated findings. | 14         |
+| `@ferryline/sdk`    | [packages/sdk](packages/sdk)         | One TypeScript interface for both rails: `quote → build → sign → track`. Returns unsigned XDR, so it works with any wallet.                                                                  | 96         |
+| `ferryline-relayer` | [packages/relayer](packages/relayer) | A real, running Fastify + PostgreSQL service that completes inbound (EVM → Stellar) CCTP delivery on the sender's behalf.                                                                    | 196 + 37\* |
+| `@ferryline/widget` | [packages/widget](packages/widget)   | A real, framework-agnostic `<ferryline-widget>` custom element wiring the SDK, a real wallet-kit session, and a transaction preview into one drop-in UI.                                     | 49         |
+| `ferryline-router`  | [contracts/router](contracts/router) | A real, deployed Soroban contract so vaults, payroll, and escrow contracts can send cross-chain in a single call, including atomic multi-leg batches.                                        | 32         |
+| `@ferryline/site`   | [apps/site](apps/site)               | The public landing page (Next.js App Router). Built on real content only: code samples matching the SDK's actual API, and a verification log citing this project's own real, dated findings. | 9          |
+| `apps/playground`   | [apps/playground](apps/playground)   | A real Next.js app embedding `<ferryline-widget>` against real testnet infrastructure, plus a protocol inspector panel for watching the actual SDK/relayer traffic a transfer produces.      | 27         |
+
+\* 37 relayer tests are integration tests requiring a live Postgres via Docker
+(`pnpm --filter ferryline-relayer test:integration`); they aren't included in `pnpm test` and don't
+run in an environment without a Docker daemon.
 
 ### `@ferryline/core` — the shared kernel
 
@@ -172,6 +180,24 @@ than needing its own integration with either rail:
   [contracts/router/THREAT_MODEL.md](contracts/router/THREAT_MODEL.md) for the invariant-by-invariant
   security reasoning and its own mutation-testing proof.
 
+### `apps/playground` — the real widget, running against real infrastructure
+
+A Next.js app whose entire purpose is proving the widget works outside a test double: it embeds
+the real `<ferryline-widget>` custom element (see `components/widget-embed.tsx`), wired to real
+testnet CCTP infrastructure, alongside a protocol inspector panel (`components/inspector-panel.tsx`)
+that surfaces the actual XDR, Circle attestation, and relayer HTTP calls a transfer produces as
+they happen, not a simulated or replayed trace.
+
+- **Fully functional with zero configuration.** Both relayer-related environment variables
+  (`NEXT_PUBLIC_FERRYLINE_RELAYER_URL`, `NEXT_PUBLIC_FERRYLINE_RELAYER_API_KEY`) are optional; with
+  neither set, the widget still runs end to end, only automatic inbound delivery is unavailable.
+- **The relayer API key, if set, is public by construction.** Both env vars are
+  `NEXT_PUBLIC_`-prefixed, so they ship to every visitor's browser the moment this page deploys —
+  the playground's own README is explicit that any configured key must be a dedicated,
+  low-privilege, easily-revocable one, never a production integrator's key.
+- Intended to be reachable at `playground.ferryline.dev` once deployed; not hosted anywhere public
+  yet, same as `@ferryline/site` below.
+
 ### `@ferryline/site` — the public landing page
 
 A real Next.js 16 / React 19 app (App Router, static-prerendered, no server required to host it):
@@ -256,7 +282,7 @@ Requirements: Node 22.12+ (CI uses 24), pnpm 11, Rust stable with the `wasm32v1-
 ```sh
 pnpm install
 pnpm build            # turbo: builds every TypeScript package in dependency order
-pnpm test             # vitest in every package (318 tests as of this writing)
+pnpm test             # vitest in every package (461 tests as of this writing, excludes relayer integration)
 pnpm typecheck
 pnpm lint             # eslint, zero errors expected
 pnpm format           # prettier --check, zero violations expected
@@ -271,7 +297,7 @@ stellar contract build
 `pnpm lint` and `pnpm format` are both part of this project's real definition of green, not
 optional extras, run them alongside build/typecheck/test before considering any change finished.
 
-The relayer additionally has real, live-database integration tests (18 of them) that need a running
+The relayer additionally has real, live-database integration tests (37 of them) that need a running
 Postgres instance:
 
 ```sh
