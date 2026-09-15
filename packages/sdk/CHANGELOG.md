@@ -8,7 +8,39 @@ so entries through the `nonceUsed` fix are dated rather than versioned, and refl
 shipped as part of `0.1.0`. Starting with `0.1.1`, entries are grouped under their real published
 version.
 
+## 0.1.3 (2026-09-15)
+
+### Fixed
+
+- **`0.1.2` was published broken: `@ferryline/core` shipped as the literal, unresolved string
+  `"workspace:*"` instead of a real version.** Root cause: `0.1.2` was published via plain
+  `npm publish`, which does not rewrite pnpm's `workspace:*` protocol to a real, resolved version
+  before packing — only `pnpm publish` does that. Confirmed via a genuinely clean
+  `npm install @ferryline/sdk` outside this monorepo, against the real public registry: it failed
+  outright with `EUNSUPPORTEDPROTOCOL`, for every real consumer, from the moment `0.1.2` was
+  published. `0.1.0` and `0.1.1` were both correct — this was not a regression carried forward from
+  either of them, it was specific to how `0.1.2` alone was published.
+
+  **`0.1.2` cannot be corrected in place** — npm does not allow overwriting a published version, and
+  even an unpublish-and-republish would permanently burn that version string (npm never allows
+  republishing an unpublished version number). `0.1.2` remains listed in this package's real
+  published history as a known-broken release; `latest` points at `0.1.3` and later.
+
+  **This release's own source is otherwise identical to `0.1.2`** — the `registerOutboundTransfer`
+  change documented below is unchanged; only the packaging is fixed. See
+  [`/PUBLISHING.md`](https://github.com/ferryline-labs/ferryline/blob/main/PUBLISHING.md) in the
+  repo root for the full incident writeup and the structural fix now in place (every publishable
+  package's `package.json` has a `prepublishOnly` check that hard-fails a plain `npm publish`
+  attempt, regardless of which command a human types) — the actual, real reason this class of bug
+  cannot recur the same way again, not just a promise to be more careful next time.
+
+  **If you installed `@ferryline/sdk@0.1.2`, it does not work at all — upgrade to `0.1.3`.**
+
 ## 0.1.2 (2026-09-15)
+
+**Published broken — see the `0.1.3` entry above for the full incident and root cause.** The
+functional change described below is real and correct; only the npm packaging of this specific
+release was broken.
 
 ### Changed
 
