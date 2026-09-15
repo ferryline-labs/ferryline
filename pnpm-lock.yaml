@@ -114,9 +114,15 @@ importers:
       '@ferryline/design-tokens':
         specifier: workspace:*
         version: link:../../packages/design-tokens
+      '@ferryline/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
       '@ferryline/ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      '@ferryline/widget':
+        specifier: workspace:*
+        version: link:../../packages/widget
       next:
         specifier: ^16.3.5
         version: 16.3.5(@babel/core@7.29.7)(@types/node@22.20.2)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)

@@ -2,20 +2,26 @@ import type { ReactElement } from "react";
 
 import { Section, SectionHeader } from "@ferryline/ui";
 
-/**
- * Scaffold placeholder — the real <ferryline-widget> embed, testnet-only messaging, USDT0
- * exclusion copy, and the protocol inspector panel are the next phase, built on top of this
- * scaffold rather than as part of it. This page exists so the app is a real, buildable,
- * deployable Next.js app right now, not to stand in for the finished playground.
- */
+import { InspectorPanel } from "@/components/inspector-panel";
+import { RetryDelayNote } from "@/components/retry-delay-note";
+import { WidgetEmbedLoader } from "@/components/widget-embed-loader";
+
 export default function PlaygroundPage(): ReactElement {
   return (
     <Section>
       <SectionHeader
         eyebrow="Playground"
-        title="Coming next: a real, live widget"
-        description="This page is a scaffold — the actual <ferryline-widget> embed and protocol inspector land in the next pass."
+        title="A real, live widget"
+        description="The real <ferryline-widget>, on testnet, with a protocol inspector showing the actual XDR/attestation/relayer calls as they happen — not a screen recording."
       />
+
+      <div className="mt-10 grid grid-cols-2 gap-gutter tablet:grid-cols-1">
+        <div>
+          <WidgetEmbedLoader />
+          <RetryDelayNote />
+        </div>
+        <InspectorPanel />
+      </div>
     </Section>
   );
 }
