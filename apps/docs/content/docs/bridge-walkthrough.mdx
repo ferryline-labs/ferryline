@@ -155,7 +155,9 @@ This is a no-op (never throws) if `relayerUrl` wasn't set in the client config a
 calling it any earlier is a real bug this project already shipped and fixed. With a relayer
 configured, this is normally all it takes for delivery to complete on its own; skip to
 [the honest limits of that claim](#delivery-isnt-a-guaranteed-sla) if you want the caveats before
-relying on it.
+relying on it. Check the returned `{ registered, error? }` if you want to react to a genuine
+registration failure yourself (an unreachable/misconfigured relayer, an invalid API key) rather
+than assuming success — see the SDK reference for the exact shape.
 
 ### Track it to completion
 

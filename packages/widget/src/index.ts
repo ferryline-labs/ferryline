@@ -24,6 +24,7 @@ import type {
   FerrylineNetwork,
   Quote,
   RailId,
+  RegisterOutboundTransferResult,
   TransferRequest,
   TransferStage,
 } from "@ferryline/sdk";
@@ -93,29 +94,103 @@ const RAIL_LABELS: Readonly<Record<RailId, string>> = {
  * ONLY path. `track()`'s "verified" stage still only means the attestation is real and complete —
  * it does NOT mean delivery is imminent or guaranteed, with or without a relayer configured.
  *
- * The copy below is two variants, chosen by whether THIS widget instance has a relayer configured
- * at all (relayerUrl set) — an integrator running the widget with no relayer configured (a real,
- * still-fully-supported mode, see FerrylineConfig.relayerUrl's own doc comment) must not be told
- * "a relayer is handling this" when none is registered on their behalf.
+ * The copy below is now THREE variants (updated from an earlier two-variant version that took just
+ * `relayerConfigured: boolean` and showed the "has been registered" success text unconditionally
+ * whenever a relayer was configured — even when the real `registerOutboundTransfer` call had just
+ * genuinely failed; confirmed live: a real 401 from a misconfigured relayer API key still produced
+ * that exact success text, an honest false-positive claim). `registerOutboundTransfer` now returns a
+ * real {@link RegisterOutboundTransferResult} instead of `void` specifically so this function can
+ * tell the difference — see that type's own doc comment in @ferryline/sdk.
+ *
+ * `relayerConfigured` (a stable, always-known fact — whether a `relayer-url` attribute is set at
+ * all) alone decides variant 1, "not automatic for this rail" (same as before — an integrator
+ * running the widget with no relayer configured, a real, still-fully-supported mode, must not be
+ * told "a relayer is handling this" when none is registered on their behalf). When a relayer IS
+ * configured, `registrationResult` decides between the other two: `registered: true` for variant 2,
+ * the real, confirmed success text (unchanged); anything else for variant 3, the new, honest
+ * failure/uncertain wording — covering both a genuine failure (`error` set) and the brief, real gap
+ * where `registered` is still `undefined` because the registration attempt one line earlier in
+ * `afterStepSubmitted` has not resolved by this particular render yet ("verified" can already be
+ * showing while that await is still in flight) — deliberately never the false "has been registered"
+ * claim during that gap either.
  */
-function outboundDeliveryCaveat(relayerConfigured: boolean): string {
-  return relayerConfigured
-    ? "Attestation complete. This transfer has been registered with the configured relayer for " +
-        "automatic delivery on the destination chain — but that is not a guaranteed delivery-time " +
-        "SLA: receiveMessage remains permissionless, so if the relayer is unavailable or its daily " +
-        "spend limit is reached, anyone (you, the recipient, or another relayer) can still submit " +
-        "the attested message on-chain and pay its gas. This is normal, expected behavior, not a " +
-        "sign of an error."
-    : "Attestation complete. Delivery on the destination chain is not automatic for this rail — it " +
-        "requires someone (you, the recipient, or an integrator's own relayer) to submit the " +
-        "attested message on-chain and pay its gas. This can be done by anyone at any time; it is " +
-        "not a sign of an error, but it also will not simply arrive on its own.";
+function outboundDeliveryCaveat(
+  relayerConfigured: boolean,
+  registrationResult: RegisterOutboundTransferResult | undefined,
+): string {
+  if (!relayerConfigured) {
+    return (
+      "Attestation complete. Delivery on the destination chain is not automatic for this rail — it " +
+      "requires someone (you, the recipient, or an integrator's own relayer) to submit the " +
+      "attested message on-chain and pay its gas. This can be done by anyone at any time; it is " +
+      "not a sign of an error, but it also will not simply arrive on its own."
+    );
+  }
+  if (registrationResult?.registered === true) {
+    return (
+      "Attestation complete. This transfer has been registered with the configured relayer for " +
+      "automatic delivery on the destination chain — but that is not a guaranteed delivery-time " +
+      "SLA: receiveMessage remains permissionless, so if the relayer is unavailable or its daily " +
+      "spend limit is reached, anyone (you, the recipient, or another relayer) can still submit " +
+      "the attested message on-chain and pay its gas. This is normal, expected behavior, not a " +
+      "sign of an error."
+    );
+  }
+  return (
+    "Attestation complete, but automatic relay registration with the configured relayer failed, so " +
+    "this transfer is NOT currently registered for automatic delivery. This transfer may need to be " +
+    "completed manually: receiveMessage remains permissionless, so anyone (you, the recipient, or " +
+    "another relayer) can still submit the attested message on-chain and pay its gas."
+  );
 }
 
 /** True only for an outbound (Stellar -> EVM) CCTP quote — the specific case the caveat above applies to. */
 function isOutboundCctp(quote: Quote): boolean {
   return quote.rail === "usdc-cctp" && quote.request.from.chain === "stellar";
 }
+
+/**
+ * Deliberate pause, in `afterStepSubmitted` below, specifically between a Stellar step's confirmed
+ * on-chain landing and building/submitting the very next Stellar step in the same transfer (today,
+ * this is only the outbound CCTP approve -> burn sequence — see `usdc-cctp/adapter.ts`'s own
+ * `stellar-transaction-deferred` step, the only place in this codebase two Stellar transactions from
+ * the same account are submitted back to back).
+ *
+ * Why this exists — stated plainly, with the honesty standard this project already holds every
+ * platform finding to: this is an EMPIRICALLY OBSERVED PATTERN, not a documented Soroban/Stellar
+ * platform behavior. A real verification pass (this widget's own real testnet E2E testing, plus a
+ * direct search of Stellar's official developer docs — the RPC `sendTransaction` reference, the
+ * account/sequence-number fundamentals page, the transaction lifecycle page, the Stellar blog's own
+ * "Proposed Changes To Transaction Submission" post, and the official `stellar-dev` dapp-development
+ * skill's own reference `submitSorobanTransaction` implementation) found NO official documentation of
+ * "the RPC node's own account/sequence-number state can temporarily lag the network's actual current
+ * state for a transaction submitted immediately after a prior one from the same account" — the
+ * official reference implementation itself throws immediately on any `ERROR` status, with no retry or
+ * delay guidance at all.
+ *
+ * What IS real: every `tx_bad_seq` rejection observed during this widget's own real testnet
+ * E2E testing (many, across multiple sessions) was the SECOND of two Stellar transactions
+ * submitted back to back from the same account — the approve confirming, then the burn being built
+ * and submitted immediately after. Some of those were false rejections (the transaction had, in
+ * fact, landed — confirmed independently via Horizon); others were genuine failures (the
+ * transaction never landed even after the rejection-recheck fix's own bounded retries) — see
+ * `submitStellarTransactionWithRejectionRecheck`'s own doc comment in client.ts for that fix, which
+ * remains the correct backstop here regardless of this delay's effect. This delay is a mitigation
+ * aimed at reducing how often the false-rejection class happens in the first place, reasoned from
+ * that real, repeated pattern — not a confirmed fix for a documented platform issue.
+ *
+ * The 3000ms this constant started at was itself found insufficient by further real testing: this
+ * exact `tx_bad_seq` rejection kept recurring even with that delay in place. A direct, live
+ * measurement taken during that investigation (comparing `getLatestLedger` on
+ * `soroban-testnet.stellar.org` against Horizon's own latest ledger at the same moment) found this
+ * public RPC endpoint genuinely running about 2 ledgers, roughly 10-12 real seconds, behind the
+ * actual network — a real, current lag on this specific node at that time, not a one-off. Bumped to
+ * 15000ms to sit comfortably above that measured gap. This value is a snapshot of one measurement,
+ * not a guaranteed bound — the lag can vary, and `submitStellarTransactionWithRejectionRecheck`'s
+ * own bounded retry/recheck (client.ts) is the actual, correct safety net that still applies
+ * regardless of whether this delay turns out to be enough on any given real run.
+ */
+const POST_APPROVE_BUILD_DELAY_MS = 15000;
 
 export class FerrylineWidget extends HTMLElement {
   static readonly observedAttributes = [
@@ -131,9 +206,33 @@ export class FerrylineWidget extends HTMLElement {
   #phase: WidgetPhase = { kind: "idle" };
   #request: TransferRequest | undefined;
   #abort: AbortController | undefined;
+  /**
+   * Real, observed race: `set request` starts a fresh, independent quote/build/sign/submit chain
+   * every time it's called, with no cancellation of whatever chain was already in flight. If the
+   * caller (e.g. a user giving up on a stuck submission and starting a new transfer) sets `request`
+   * again while a PREVIOUS chain is still awaiting something (most likely
+   * `submitStellarTransactionWithRejectionRecheck`'s now-much-longer on-chain recheck window, up to
+   * ~2 minutes across its bounded retries), that old chain's async continuation eventually resumes
+   * and calls `this.setPhase(...)` unconditionally — clobbering the NEW chain's current phase even
+   * after it has already completed successfully. Confirmed for real: a completed transfer's
+   * `tracking` phase was silently overwritten by an old, abandoned submission's `sign-failed`
+   * several tens of seconds after the new transfer had already succeeded.
+   *
+   * Fix: every call to `set request` bumps this counter. Each async flow that can outlive a
+   * newer request (`startQuote`, `confirmAndSign`, `afterStepSubmitted`) captures the generation it
+   * started with and passes it to `setPhaseIfCurrent`, which is a silent no-op once a newer
+   * generation exists — the stale chain's result is simply discarded rather than surfacing an error
+   * (or a stale success) for a transfer the widget/caller has already moved on from.
+   */
+  #requestGeneration = 0;
   #inboundStatus:
     { readonly status: string; readonly destinationTxHash?: string | null } | undefined;
   #walletError: string | undefined;
+  /** Real result of the one, final-step registerOutboundTransfer call for the CURRENTLY rendered
+   *  transfer — see outboundDeliveryCaveat's own doc comment for why this exists (a real, live 401
+   *  used to render as if registration had succeeded). Set once, right after that call resolves, in
+   *  afterStepSubmitted; read by render()'s own "verified" case below. */
+  #outboundRegistrationResult: RegisterOutboundTransferResult | undefined;
 
   /**
    * Test-only injection seams. Component tests set these to a fixture-backed `WidgetClient` /
@@ -144,6 +243,16 @@ export class FerrylineWidget extends HTMLElement {
    */
   testClientOverride: WidgetClient | undefined;
   testWalletOverride: WalletSession | undefined;
+  /**
+   * Test-only override for `POST_APPROVE_BUILD_DELAY_MS` (see that constant's own doc comment for
+   * why the real delay exists). NOT a real, documented widget config option — deliberately not
+   * exposed as an attribute/property in the public docs, since the real 3-second default is an
+   * internal mitigation for observed RPC timing behavior, not something an integrator should be
+   * expected to tune. Exists purely so index.test.ts can prove the delay is genuinely applied
+   * without a real multi-second wait per test run. `undefined` (the real, shipped default) means
+   * "use the real constant" — see `afterStepSubmitted`'s own use of this field below.
+   */
+  testPostApproveBuildDelayMsOverride: number | undefined;
 
   connectedCallback(): void {
     this.render();
@@ -180,8 +289,12 @@ export class FerrylineWidget extends HTMLElement {
   /** Rail-agnostic request. Set imperatively (`el.request = {...}`) — see class doc comment. */
   set request(value: TransferRequest | undefined) {
     this.#request = value;
+    // Bump BEFORE starting the new chain (if any): startQuote below captures this new value as its
+    // own generation, and any PREVIOUS chain still in flight now has a stale, already-superseded
+    // generation number baked into its own closure — see #requestGeneration's own doc comment.
+    this.#requestGeneration += 1;
     if (value) {
-      void this.startQuote(value);
+      void this.startQuote(value, this.#requestGeneration);
     }
   }
 
@@ -216,19 +329,45 @@ export class FerrylineWidget extends HTMLElement {
   }
 
   private setPhase(phase: WidgetPhase): void {
+    // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
+    console.log(`[ferryline-widget] phase -> ${phase.kind}`, phase);
     this.#phase = phase;
     this.render();
   }
 
+  /**
+   * Same as `setPhase`, but for an async flow's own continuation after an `await` — silently drops
+   * the update if `generation` is no longer the current `#requestGeneration` (a newer `request` has
+   * been set since this flow started, so this result belongs to a transfer the widget has already
+   * moved on from). See `#requestGeneration`'s own doc comment for the real race this defends
+   * against. Never used for a phase transition triggered synchronously by the current user action
+   * (a button click, `cancelPreview`, ...) — those are always for the current generation by
+   * construction, since the button that triggered them is only rendered for the current phase.
+   */
+  private setPhaseIfCurrent(phase: WidgetPhase, generation: number): void {
+    if (generation !== this.#requestGeneration) {
+      // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
+      console.log(
+        `[ferryline-widget] DROPPED stale phase -> ${phase.kind} (generation ${String(generation)}, current is ${String(this.#requestGeneration)})`,
+        phase,
+      );
+      return;
+    }
+    this.setPhase(phase);
+  }
+
   // ---- Quote / build (STEP 2A) ----------------------------------------------------------------
 
-  private async startQuote(request: TransferRequest): Promise<void> {
+  private async startQuote(request: TransferRequest, generation: number): Promise<void> {
+    // Synchronous, so always current by construction (called directly from `set request`, which
+    // just bumped the generation to this same value) — setPhase, not setPhaseIfCurrent, is correct
+    // here and is what makes the FIRST render of "quoting" actually show up.
     this.setPhase(startQuoting());
     try {
       const quote = await this.client().ferryline.quote(request);
-      this.setPhase(quoteSucceeded(quote));
+      this.setPhaseIfCurrent(quoteSucceeded(quote), generation);
     } catch (error) {
-      this.setPhase(quoteFailed(message(error)));
+      this.setPhaseIfCurrent(quoteFailed(message(error)), generation);
     }
   }
 
@@ -237,22 +376,29 @@ export class FerrylineWidget extends HTMLElement {
       return;
     }
     const { quote } = this.#phase;
+    const generation = this.#requestGeneration;
     this.setPhase(startBuilding(quote));
     try {
       const built = await this.client().ferryline.build(quote);
-      this.setPhase(buildSucceeded(quote, built, 0));
+      this.setPhaseIfCurrent(buildSucceeded(quote, built, 0), generation);
     } catch (error) {
-      this.setPhase(buildFailed(quote, message(error)));
+      this.setPhaseIfCurrent(buildFailed(quote, message(error)), generation);
     }
   }
 
   // ---- Wallet connect (STEP 2B) ----------------------------------------------------------------
 
   private async connectWallet(moduleId?: string): Promise<void> {
+    // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
+    console.log(`[ferryline-widget] connectWallet(${moduleId ?? "<default>"}) starting`);
     try {
       this.#connected = await this.wallet().connect(moduleId);
+      // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
+      console.log("[ferryline-widget] connectWallet succeeded", this.#connected);
       this.render();
     } catch (error) {
+      // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
+      console.log("[ferryline-widget] connectWallet FAILED", error);
       // Connection failures render inline rather than forcing a phase transition — the user may
       // still be mid-quote/build and a wallet reconnect shouldn't discard that state.
       this.renderError(`Wallet connection failed: ${message(error)}`);
@@ -268,27 +414,66 @@ export class FerrylineWidget extends HTMLElement {
   // `wallet().signTransaction` directly — every signing call in this class is gated through here.
 
   private async confirmAndSign(): Promise<void> {
+    // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
+    console.log("[ferryline-widget] confirmAndSign() called, current phase:", this.#phase.kind);
     if (this.#phase.kind !== "preview") {
+      // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
+      console.log(
+        "[ferryline-widget] confirmAndSign() no-op: phase is not 'preview' (button should have been unclickable)",
+      );
       return; // structurally unreachable via the UI; defensive no-op if called out of order.
     }
+    // Captured up front: this whole flow (through wallet signing, RPC submission, and the retry/
+    // recheck fix's own up-to-~2-minute worst case) can outlive a newer `request` being set — see
+    // #requestGeneration's own doc comment. Every setPhase call below that follows an `await` uses
+    // setPhaseIfCurrent(..., generation) instead of setPhase so a stale result is dropped, not
+    // surfaced.
+    const generation = this.#requestGeneration;
     const signingPhase = confirmPreviewAndSign(this.#phase);
     this.setPhase(signingPhase);
     if (signingPhase.kind !== "signing") {
+      // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
+      console.log(
+        "[ferryline-widget] confirmAndSign() no-op: confirmPreviewAndSign did not produce a signing phase",
+        signingPhase,
+      );
       return;
     }
     const { quote, built, stepIndex } = signingPhase;
     const step = built.steps[stepIndex];
     if (!step) {
-      this.setPhase(signFailed({ quote, built }, `no step at index ${String(stepIndex)}`));
+      this.setPhaseIfCurrent(
+        signFailed({ quote, built }, `no step at index ${String(stepIndex)}`),
+        generation,
+      );
       return;
     }
     try {
       if (step.kind === "stellar-transaction") {
         const client = this.client();
+        // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
+        console.log(
+          `[ferryline-widget] step ${String(stepIndex)}: requesting wallet signature (this is what shows the Freighter popup)`,
+        );
         const signedXdr = await this.wallet().signTransaction(step.xdr, client.networkPassphrase);
+        // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
+        console.log(`[ferryline-widget] step ${String(stepIndex)}: wallet signature received`);
+        // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
+        console.log(
+          `[ferryline-widget] step ${String(stepIndex)}: submitting signed transaction to Stellar RPC`,
+        );
         const sourceTxHash = await client.submitStellarTransaction(signedXdr);
+        // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
+        console.log(
+          `[ferryline-widget] step ${String(stepIndex)}: submitStellarTransaction resolved, hash =`,
+          sourceTxHash,
+        );
         await client.ferryline.markSubmitted(built.transferId, sourceTxHash);
-        await this.afterStepSubmitted(quote, built, stepIndex);
+        // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
+        console.log(`[ferryline-widget] step ${String(stepIndex)}: markSubmitted done`);
+        await this.afterStepSubmitted(quote, built, stepIndex, generation);
+        // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
+        console.log(`[ferryline-widget] step ${String(stepIndex)}: afterStepSubmitted done`);
       } else if (step.kind === "evm-transaction") {
         throw new Error(
           "EVM-side signing (inbound builds) is driven by the sending chain's own wallet, outside this widget's Stellar-wallet session — see relayer.ts's registerTransfer for the inbound flow this widget drives after that external signature.",
@@ -297,7 +482,9 @@ export class FerrylineWidget extends HTMLElement {
         throw new Error(`cannot sign a deferred step directly at index ${String(stepIndex)}`);
       }
     } catch (error) {
-      this.setPhase(signFailed({ quote, built }, message(error)));
+      // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
+      console.log(`[ferryline-widget] step ${String(stepIndex)}: FAILED`, error);
+      this.setPhaseIfCurrent(signFailed({ quote, built }, message(error)), generation);
     }
   }
 
@@ -305,21 +492,39 @@ export class FerrylineWidget extends HTMLElement {
     this.setPhase(resetPhase());
   }
 
-  /** After a step is signed and its tx hash recorded: advance to the next step, or start tracking. */
+  /** After a step is signed and its tx hash recorded: advance to the next step, or start tracking.
+   *  `generation` is the caller's own (confirmAndSign's) captured generation — threaded through
+   *  rather than re-read here, since re-reading `this.#requestGeneration` at this point would
+   *  always appear "current" even when it isn't (it's the same field a newer `request` bumps). */
   private async afterStepSubmitted(
     quote: Quote,
     built: BuiltTransfer,
     stepIndex: number,
+    generation: number,
   ): Promise<void> {
     if (!isFinalStep(built, stepIndex)) {
       const nextIndex = stepIndex + 1;
-      this.setPhase(signedAwaitingNextStep({ quote, built, stepIndex: nextIndex }));
+      this.setPhaseIfCurrent(
+        signedAwaitingNextStep({ quote, built, stepIndex: nextIndex }),
+        generation,
+      );
+      // Real, empirically observed pattern (not an officially documented Soroban RPC behavior —
+      // see POST_APPROVE_BUILD_DELAY_MS's own doc comment for the full honesty caveat): pause here,
+      // between the just-confirmed step's on-chain landing and building/submitting the very next
+      // step, specifically because this exact back-to-back-submission shape is what every real
+      // tx_bad_seq rejection observed during this widget's own testnet testing had in common.
+      await new Promise((resolve) =>
+        setTimeout(
+          resolve,
+          this.testPostApproveBuildDelayMsOverride ?? POST_APPROVE_BUILD_DELAY_MS,
+        ),
+      );
       const nextStep = await this.client().ferryline.prepareStep(built.transferId, nextIndex);
       const rebuilt = {
         ...built,
         steps: built.steps.map((s, i) => (i === nextIndex ? nextStep : s)),
       };
-      this.setPhase(buildSucceeded(quote, rebuilt, nextIndex));
+      this.setPhaseIfCurrent(buildSucceeded(quote, rebuilt, nextIndex), generation);
       return;
     }
     // This IS the final step (isFinalStep(built, stepIndex) === true — imported from
@@ -330,26 +535,48 @@ export class FerrylineWidget extends HTMLElement {
     // approve step before its burn) sent the WRONG tx hash first and caused the correct, later
     // registration to be rejected as a duplicate by the relayer's own transferId primary key — see
     // @ferryline/sdk's registerOutboundTransfer/isFinalStep doc comments for the full story.
-    // Fire-and-forget (never awaited into the caller's own flow beyond this): registerOutboundTransfer
-    // itself never throws and gates itself off entirely for inbound/non-CCTP transfers and when no
-    // relayer is configured — see its own doc comment.
-    await this.client().ferryline.registerOutboundTransfer(built.transferId);
+    // registerOutboundTransfer itself never throws and gates itself off entirely for
+    // inbound/non-CCTP transfers and when no relayer is configured — see its own doc comment. It
+    // DOES, though, now return its real outcome (see RegisterOutboundTransferResult in
+    // @ferryline/sdk) instead of void — captured below so render()'s own "verified" case can show
+    // an honest message instead of assuming success (a real, live 401 from a misconfigured relayer
+    // API key used to render as "registered with the configured relayer" regardless).
+    //
+    // Registration itself is NOT skipped for a stale generation (an abandoned transfer may already
+    // be genuinely submitted on-chain and still deserves real relayer registration/tracking even if
+    // the widget's own UI has moved on) — only this instance's OWN rendered phase is guarded below.
+    const registrationResult = await this.client().ferryline.registerOutboundTransfer(
+      built.transferId,
+    );
+    if (generation === this.#requestGeneration) {
+      // Same staleness guard as setPhaseIfCurrent's own — a stale generation's real registration
+      // result must not overwrite the field render() reads for whatever transfer is CURRENT now.
+      this.#outboundRegistrationResult = registrationResult;
+    }
     // Seed a "tracking" phase immediately, before the first real status arrives — track()'s first
     // yield can lag by however long the RPC/Horizon round-trip takes, and without this the UI would
     // otherwise show nothing between "wallet accepted the signature" and that first real update.
-    this.setPhase(
+    this.setPhaseIfCurrent(
       startTracking(quote, built, {
         transferId: built.transferId,
         stage: "submitted",
         updatedAt: Date.now(),
       }),
+      generation,
     );
+    if (generation !== this.#requestGeneration) {
+      // A newer transfer is now live and already has its own #abort/track() loop (or none yet) —
+      // starting this stale transfer's tracking loop would stomp that one's #abort field. The stale
+      // transfer's real on-chain progress is unaffected (registerOutboundTransfer above already ran
+      // for real); only this instance's own polling loop for it is skipped.
+      return;
+    }
     this.#abort = new AbortController();
     for await (const status of this.client().ferryline.track(
       built.transferId,
       this.#abort.signal,
     )) {
-      this.setPhase(trackingUpdated({ quote, built }, status));
+      this.setPhaseIfCurrent(trackingUpdated({ quote, built }, status), generation);
       if (status.stage === "delivered" || status.stage === "failed") {
         break;
       }
@@ -491,7 +718,7 @@ export class FerrylineWidget extends HTMLElement {
           <p part="status">${STAGE_LABELS[phase.status.stage]}</p>
           ${
             phase.status.stage === "verified" && isOutboundCctp(phase.quote)
-              ? `<div part="delivery-caveat" class="caveat">${outboundDeliveryCaveat(Boolean(this.relayerUrl))}</div>`
+              ? `<div part="delivery-caveat" class="caveat">${outboundDeliveryCaveat(Boolean(this.relayerUrl), this.#outboundRegistrationResult)}</div>`
               : ""
           }
           ${phase.status.sourceTxHash ? `<div part="source-tx" class="tx-hash">Source tx: ${escapeHtml(phase.status.sourceTxHash)}</div>` : ""}`;

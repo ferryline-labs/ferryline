@@ -128,7 +128,12 @@ explicit call, `registerOutboundTransfer()` below.
 ### `registerOutboundTransfer()`
 
 ```ts
-registerOutboundTransfer(transferId: TransferId): Promise<void>;
+registerOutboundTransfer(transferId: TransferId): Promise<RegisterOutboundTransferResult>;
+
+interface RegisterOutboundTransferResult {
+  readonly registered: boolean;
+  readonly error?: string;
+}
 ```
 
 Opts an **outbound** (Stellar→EVM) CCTP transfer into automatic delivery via a self-hosted
@@ -147,13 +152,20 @@ Concretely, it `POST`s to `${relayerUrl}/outbound-transfers` with
 `{ transferId, sourceTxHash, destinationChain, rail: "usdc-cctp" }` — the same
 never-trust-amount-or-recipient-from-the-registration-call security property the relayer's inbound
 `POST /transfers` already has (see [Relayer](/docs/relayer)). It **never throws**: three separate
-conditions all make it a silent no-op rather than an error — no `relayerUrl` configured; the
-transfer isn't an outbound CCTP transfer (checked via `rail === "usdc-cctp" && request.from.chain
-=== "stellar"`); or the HTTP registration itself fails (network error, non-`201` response) — that
-case is caught, logged with `console.error`, and swallowed, on the reasoning that the burn is
-already on-chain and unaffected by a failed registration call. `@ferryline/widget` calls this
-automatically on your behalf once its final step confirms, so a raw SDK integrator needs it only
-when driving transfers directly (see the [end-to-end walkthrough](/docs/bridge-walkthrough)).
+conditions all make it resolve with `{ registered: false }` (no `error`) rather than throw — no
+`relayerUrl` configured; the transfer isn't an outbound CCTP transfer (checked via
+`rail === "usdc-cctp" && request.from.chain === "stellar"`); or the transfer store couldn't be read
+/ had no `sourceTxHash` recorded yet (shouldn't happen in real usage). If the HTTP registration
+itself genuinely fails (network error, non-`201` response), that's also caught and never thrown —
+the burn is already on-chain and unaffected by a failed registration call — but it's reported back
+as `{ registered: false, error: <the real failure message> }`, and logged with `console.error`
+either way, so a caller can tell a genuine failure apart from "not applicable" and react honestly
+(this replaces an earlier `Promise<void>` signature that gave callers no way to do that — a real,
+live 401 from a misconfigured relayer API key was silently reported as success to the widget's own
+UI before this existed). `@ferryline/widget` calls this automatically on your behalf once its final
+step confirms, and uses the real result to choose between its own success/failure caveat text — so a
+raw SDK integrator needs to call this directly only when driving transfers themselves (see the
+[end-to-end walkthrough](/docs/bridge-walkthrough)).
 
 ### `isFinalStep()`
 

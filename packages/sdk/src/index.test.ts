@@ -12,6 +12,7 @@ import { newTransferId } from "@ferryline/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { Ferryline, isFinalStep } from "./index.js";
+import type { RegisterOutboundTransferResult } from "./index.js";
 
 const request: TransferRequest = {
   asset: "USDT0",
@@ -285,23 +286,29 @@ describe("Ferryline.registerOutboundTransfer: called explicitly, only on the fin
    * step, using isFinalStep) sequence, mirroring exactly what a real caller (the widget's
    * afterStepSubmitted, or a raw SDK integrator following registerOutboundTransfer's own doc
    * comment) is supposed to do. Returns the ordered list of tx hashes markSubmitted was called
-   * with, for assertions about what actually got recorded/registered.
+   * with, AND the real RegisterOutboundTransferResult from the one registerOutboundTransfer call
+   * (undefined if the built transfer had zero steps, which never happens in practice), so callers
+   * can assert on the honest result, not just on fetch having been called the right number of times.
    */
   async function driveAllSteps(
     ferryline: Ferryline,
     built: BuiltTransfer,
     hashFor: (stepIndex: number) => string,
-  ): Promise<string[]> {
+  ): Promise<{
+    readonly hashes: string[];
+    readonly registrationResult: RegisterOutboundTransferResult | undefined;
+  }> {
     const hashes: string[] = [];
+    let registrationResult: RegisterOutboundTransferResult | undefined;
     for (let stepIndex = 0; stepIndex < built.steps.length; stepIndex += 1) {
       const hash = hashFor(stepIndex);
       hashes.push(hash);
       await ferryline.markSubmitted(built.transferId, hash);
       if (isFinalStep(built, stepIndex)) {
-        await ferryline.registerOutboundTransfer(built.transferId);
+        registrationResult = await ferryline.registerOutboundTransfer(built.transferId);
       }
     }
-    return hashes;
+    return { hashes, registrationResult };
   }
 
   it(
@@ -322,10 +329,13 @@ describe("Ferryline.registerOutboundTransfer: called explicitly, only on the fin
 
       const approveTxHash = "aa".repeat(32);
       const burnTxHash = "bb".repeat(32);
-      const hashes = await driveAllSteps(ferryline, built, (i) =>
+      const { hashes, registrationResult } = await driveAllSteps(ferryline, built, (i) =>
         i === 0 ? approveTxHash : burnTxHash,
       );
       expect(hashes).toEqual([approveTxHash, burnTxHash]); // both steps really got submitted/recorded
+      // The honest result reports real success — not just "fetch was called the right number of
+      // times", the actual RegisterOutboundTransferResult a caller like the widget reacts to.
+      expect(registrationResult).toEqual({ registered: true });
 
       // The core assertion: exactly ONE registration call, and it carries the BURN hash — not the
       // approve's. This is the exact scenario the original bug produced two calls for (the wrong
@@ -367,8 +377,13 @@ describe("Ferryline.registerOutboundTransfer: called explicitly, only on the fin
       expect(built.steps).toHaveLength(1); // real one-step shape: burn only, index 0 is final
 
       const burnTxHash = "cc".repeat(32);
-      const hashes = await driveAllSteps(ferryline, built, () => burnTxHash);
+      const { hashes, registrationResult } = await driveAllSteps(
+        ferryline,
+        built,
+        () => burnTxHash,
+      );
       expect(hashes).toEqual([burnTxHash]);
+      expect(registrationResult).toEqual({ registered: true });
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
       const [url, init] = fetchMock.mock.calls[0]!;
@@ -388,7 +403,12 @@ describe("Ferryline.registerOutboundTransfer: called explicitly, only on the fin
     const built = await ferryline.build(await ferryline.quote(outboundRequest));
 
     await ferryline.markSubmitted(built.transferId, "aa".repeat(32));
-    await expect(ferryline.registerOutboundTransfer(built.transferId)).resolves.toBeUndefined();
+    // Not-applicable gate: registered: false, no error — see RegisterOutboundTransferResult's own
+    // doc comment for why this stays the same silent "nothing to show the user" outcome it always
+    // was, not a new caller-facing failure.
+    await expect(ferryline.registerOutboundTransfer(built.transferId)).resolves.toEqual({
+      registered: false,
+    });
 
     expect(fetchSpy).not.toHaveBeenCalled();
   });
@@ -414,7 +434,10 @@ describe("Ferryline.registerOutboundTransfer: called explicitly, only on the fin
     });
 
     await ferryline.markSubmitted(transferId, "0x" + "bb".repeat(32));
-    await ferryline.registerOutboundTransfer(transferId);
+    // Not-applicable gate: registered: false, no error — same silent outcome as gate 1.
+    await expect(ferryline.registerOutboundTransfer(transferId)).resolves.toEqual({
+      registered: false,
+    });
 
     expect(fetchSpy).not.toHaveBeenCalled();
   });
@@ -432,8 +455,14 @@ describe("Ferryline.registerOutboundTransfer: called explicitly, only on the fin
       const built = await ferryline.build(await ferryline.quote(outboundRequest));
       await ferryline.markSubmitted(built.transferId, "dd".repeat(32));
 
-      // The core assertion: registerOutboundTransfer itself must resolve normally, not reject.
-      await expect(ferryline.registerOutboundTransfer(built.transferId)).resolves.toBeUndefined();
+      // The core assertion: registerOutboundTransfer itself must resolve normally, not reject —
+      // AND now honestly report the real failure in its result, not silently report success (the
+      // real bug a live, misconfigured relayer API key surfaced: the widget's own UI claimed
+      // "registered with the configured relayer" for a registration that had actually failed).
+      await expect(ferryline.registerOutboundTransfer(built.transferId)).resolves.toEqual({
+        registered: false,
+        error: expect.stringContaining("simulated network failure") as string,
+      });
 
       // The failure was logged (visible to an operator), not silently swallowed without a trace.
       expect(consoleErrorSpy).toHaveBeenCalledWith(
@@ -466,7 +495,10 @@ describe("Ferryline.registerOutboundTransfer: called explicitly, only on the fin
 
     const built = await ferryline.build(await ferryline.quote(outboundRequest));
     await ferryline.markSubmitted(built.transferId, "ee".repeat(32));
-    await expect(ferryline.registerOutboundTransfer(built.transferId)).resolves.toBeUndefined();
+    await expect(ferryline.registerOutboundTransfer(built.transferId)).resolves.toEqual({
+      registered: false,
+      error: expect.stringContaining("already exists") as string,
+    });
 
     expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining("already exists"));
   });

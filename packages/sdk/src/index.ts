@@ -14,6 +14,32 @@ import { FerrylineError, InMemoryTransferStore } from "@ferryline/core";
 
 export type FerrylineNetwork = "mainnet" | "testnet";
 
+/**
+ * Real outcome of a {@link Ferryline.registerOutboundTransfer} call — replaces the method's
+ * original `Promise<void>` specifically so a caller (the widget, or any other integrator) can tell
+ * a genuine registration success apart from every other case, without registerOutboundTransfer's
+ * own "never break the caller's flow" guarantee (see that method's own doc comment) changing at
+ * all: it still never throws, for any reason.
+ *
+ * `registered: true` only for a real, confirmed 201 response from the relayer — the transfer is
+ * genuinely tracked for automatic delivery.
+ *
+ * `registered: false` for every other case, deliberately NOT further distinguished by a reason
+ * code this pass: both the two silent "not applicable" gates (no relayerUrl configured at all;
+ * the transfer isn't an outbound CCTP transfer) and the two internal-failure gates (the transfer
+ * store couldn't be read; no sourceTxHash recorded yet — neither should happen in real usage, see
+ * the method's own doc comment) report `registered: false, error: undefined` — the exact same
+ * "nothing to show the user" outcome those cases already had before this type existed, so no new
+ * UI surfaces for a scenario the widget was never reacting to. `error` is present, with a real,
+ * specific message (not a generic code), ONLY when a relayer registration attempt genuinely
+ * happened and failed — the one case that actually needs a distinct, honest caller-facing message
+ * (this is exactly what `Ferryline.registerOutboundTransfer`'s "Gate 3" below produces).
+ */
+export interface RegisterOutboundTransferResult {
+  readonly registered: boolean;
+  readonly error?: string;
+}
+
 export interface FerrylineConfig {
   readonly network: FerrylineNetwork;
   /** Stellar RPC endpoint. */
@@ -130,7 +156,15 @@ export class Ferryline {
    * against the relayer — see gate 2, and the primary-key note above for why calling it early
    * fails silently rather than "just registering later, correctly, on retry."
    *
-   * Three real "do nothing" gates, each deliberate:
+   * Returns a {@link RegisterOutboundTransferResult} instead of void — see that type's own doc
+   * comment for the full reasoning (in short: a caller like the widget needs to know whether
+   * registration genuinely succeeded before claiming so in its own UI; a real, live 401 from a
+   * misconfigured relayer API key was silently reported as success before this existed). This does
+   * NOT weaken the "never break the caller's flow" guarantee below — this method still never
+   * throws, for any reason; a failure is reported in the return value, not an exception.
+   *
+   * Three real "do nothing" gates, each deliberate, ALL reported as `{ registered: false }` with no
+   * `error` (see RegisterOutboundTransferResult's own doc comment for why these stay silent):
    *   1. No relayerUrl configured at all -> skipped silently, not an error. Per the project's own
    *      "works without a relayer" self-hosting story (same reasoning FerrylineConfig.relayerUrl's
    *      own doc comment states): an integrator who has not set up a relayer must still get a
@@ -143,21 +177,26 @@ export class Ferryline {
    *      isOutboundCctp already uses), never by reaching into the adapter-private `railRef` (see
    *      TransferStore's own doc comment: railRef is "opaque to everything except the adapter that
    *      wrote it").
-   *   3. Registration itself fails for ANY reason (relayer unreachable, misconfigured, a non-201
-   *      response — including the duplicate-tx-hash 409 the bug above would produce, a network
-   *      error) -> caught and logged via `console.error`, NEVER thrown. The underlying burn already
-   *      happened on-chain by the time this runs (only ever meaningful after a real, already-
-   *      submitted tx hash is recorded) — a relayer being down (or a caller's own bug) must never
-   *      be able to make this method fail the caller's own build/sign/track flow. See
-   *      index.test.ts's own dedicated tests proving this explicitly: simulating a relayer failure
-   *      and confirming the underlying transfer flow still completes normally, AND reproducing the
-   *      two-step approve+burn scenario to confirm registration fires exactly once, with the real
-   *      burn hash.
+   *   3. The transfer store couldn't be read, or has no sourceTxHash recorded yet -> should not
+   *      happen in real usage (registerOutboundTransfer is only ever called right after the
+   *      markSubmitted write that sets sourceTxHash), logged via console.error same as before.
+   *
+   * The one real, reportable failure case: registration itself was genuinely attempted and the
+   * relayer call failed (unreachable, misconfigured, a non-201 response — including the
+   * duplicate-tx-hash 409 the primary-key bug above would produce, a network error, an invalid API
+   * key). Still caught and logged via `console.error` exactly as before (the underlying burn
+   * already happened on-chain by the time this runs, so this is never re-thrown), but now ALSO
+   * returned as `{ registered: false, error: <the real failure message> }` so a caller can react
+   * honestly instead of assuming success. See index.test.ts's own dedicated tests proving both the
+   * never-throws guarantee AND the new honest result: simulating a relayer failure and confirming
+   * the underlying transfer flow still completes normally while the returned result correctly
+   * reports `registered: false` with the real error, AND reproducing the two-step approve+burn
+   * scenario to confirm registration fires exactly once, with the real burn hash.
    */
-  async registerOutboundTransfer(transferId: TransferId): Promise<void> {
+  async registerOutboundTransfer(transferId: TransferId): Promise<RegisterOutboundTransferResult> {
     const { relayerUrl, relayerApiKey } = this.config;
     if (!relayerUrl) {
-      return; // gate 1: no relayer configured at all — see this method's own doc comment.
+      return { registered: false }; // gate 1: see this method's own doc comment.
     }
     let record: TransferRecord | undefined;
     try {
@@ -166,10 +205,10 @@ export class Ferryline {
       console.error(
         `Ferryline.registerOutboundTransfer: failed to read transfer ${transferId} from the store; skipping relayer registration: ${String(error)}`,
       );
-      return;
+      return { registered: false };
     }
     if (record?.rail !== "usdc-cctp" || record.request.from.chain !== "stellar") {
-      return; // gate 2: not an outbound CCTP transfer — see this method's own doc comment.
+      return { registered: false }; // gate 2: not an outbound CCTP transfer — see doc comment.
     }
     if (!record.sourceTxHash) {
       // Should not happen: registerOutboundTransfer is only ever called from markSubmitted, right
@@ -178,7 +217,7 @@ export class Ferryline {
       console.error(
         `Ferryline.registerOutboundTransfer: transfer ${transferId} has no sourceTxHash recorded yet; skipping relayer registration.`,
       );
-      return;
+      return { registered: false };
     }
     try {
       const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -203,14 +242,19 @@ export class Ferryline {
             : `HTTP ${String(response.status)}`;
         throw new Error(`relayer registration failed: ${message}`);
       }
+      return { registered: true };
     } catch (error) {
-      // Gate 3: registration failing for any reason must never propagate — see this method's own
-      // doc comment for the full reasoning. The real on-chain burn already happened; a relayer
-      // being unreachable/misconfigured is the relayer's problem to fix, not a reason to fail the
-      // transfer the caller already successfully submitted.
+      // Gate 3: registration failing for any reason must never propagate as a thrown exception —
+      // see this method's own doc comment for the full reasoning. The real on-chain burn already
+      // happened; a relayer being unreachable/misconfigured is the relayer's problem to fix, not a
+      // reason to fail the transfer the caller already successfully submitted. It IS, however, now
+      // reported honestly in the returned result — see RegisterOutboundTransferResult's own doc
+      // comment for why that distinction matters.
+      const message = error instanceof Error ? error.message : String(error);
       console.error(
-        `Ferryline.registerOutboundTransfer: registering transfer ${transferId} with the relayer at ${relayerUrl} failed (the burn itself is unaffected and already on-chain): ${String(error)}`,
+        `Ferryline.registerOutboundTransfer: registering transfer ${transferId} with the relayer at ${relayerUrl} failed (the burn itself is unaffected and already on-chain): ${message}`,
       );
+      return { registered: false, error: message };
     }
   }
 
