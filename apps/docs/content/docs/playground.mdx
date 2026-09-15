@@ -1,0 +1,67 @@
+---
+title: Playground
+description: A real, live <ferryline-widget> you can try right now, real testnet transfer, real protocol inspector, no local setup.
+---
+
+**[playground-tau-beige.vercel.app](https://playground-tau-beige.vercel.app/)** is a real, live
+instance of `@ferryline/widget` embedded on its own page, not a mockup, not a screen recording. It
+runs the exact `<ferryline-widget>` custom element described on the [Widget](/docs/widget) page,
+against real Stellar testnet infrastructure, with a real protocol inspector alongside it that shows
+the actual XDR, attestation, and relayer traffic as it happens.
+
+## What it demonstrates
+
+The playground is deliberately narrow, one real path, not a menu of every rail this project
+supports: **outbound only, Stellar → Ethereum Sepolia, USDC via CCTP.** That's the direction that
+exercises the most real machinery in one flow, per its own on-page copy: the two-step
+approve-then-burn sequence, the [`POST_APPROVE_BUILD_DELAY_MS` retry
+mitigation](/docs/widget#outbound-registration-automatic), and
+[`registerOutboundTransfer`](/docs/sdk-reference#registeroutboundtransfer)'s relayer-registration
+path. USDT0 isn't offered here for the same structural reason it isn't offered anywhere on testnet,
+see [Core Concepts](/docs/core-concepts#the-two-rails).
+
+Every quote, build, and signature is real: a real Circle Iris fees call, a real Soroban RPC
+submission, a real on-chain testnet transaction once you sign. The protocol inspector alongside the
+form captures this traffic passively, through the same `window.fetch`/console interception
+mechanism described in the playground's own source (`apps/playground/lib/inspector-capture.ts`), so
+what it shows you is the actual request/response, not a formatted-after-the-fact summary.
+
+## What you need to actually complete a transfer
+
+The playground itself needs no setup, but signing a real transaction does, because this is real
+signing, not a simulated one:
+
+- **Your own Stellar testnet account and wallet extension.** The widget connects to whichever
+  wallet you pick and signs with whatever account that wallet currently holds, there's no shared
+  "demo wallet" mode, and no check anywhere that lets you type one address into the "Sender" field
+  while signing with a different connected account, see [Wallet support](/docs/widget#wallet-support)
+  for which wallets are actually confirmed to work end-to-end (Freighter, so far).
+- **That account funded on testnet.** Two real, public faucets, no API key needed, linked directly
+  on the page itself: [Friendbot](https://friendbot.stellar.org) for XLM, [Circle's testnet
+  faucet](https://faucet.circle.com) for USDC.
+- **A destination address on Ethereum Sepolia** to receive the USDC. It doesn't need to sign
+  anything or hold any ETH for this flow, delivery gas is paid on the destination side (either by a
+  configured relayer, or by whoever submits the attested message manually, see below), not by the
+  recipient.
+
+## Automatic delivery, or manual, honestly
+
+Whether a transfer completes delivery on Sepolia automatically depends on whether this specific
+deployment has a relayer configured, exactly the same real, disclosed distinction as the widget's
+own [outbound registration](/docs/widget#outbound-registration-automatic) behavior generally, not
+something this page can promise on the deployment's behalf. The playground surfaces which case
+you're in directly in its own UI, not left for you to guess:
+
+- If no relayer is configured, or a configured one is unreachable or misconfigured, the widget says
+  so plainly once your burn transaction lands, and `receiveMessage` remains genuinely permissionless
+  by CCTP's own design, so the transfer isn't stuck. See the [end-to-end
+  walkthrough](/docs/bridge-walkthrough) for the real manual-completion path.
+- If a relayer is configured and reachable, the widget registers with it automatically once your
+  burn confirms, and you can watch the real registration request and its response in the protocol
+  inspector, not just trust a status label.
+
+## Source
+
+The playground itself is real, open source code in this repo, `apps/playground`, built the same
+Next.js app either you or anyone else can run locally against your own relayer instead. See the
+"View source" link in the playground's own header, or [GitHub](https://github.com/ferryline-labs/ferryline) directly.

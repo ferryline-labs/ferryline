@@ -9,11 +9,11 @@ describe("PlaygroundFooter", () => {
 
     expect(screen.getByRole("link", { name: "Site" })).toHaveAttribute(
       "href",
-      "https://ferryline.dev",
+      "https://ferryline-site.vercel.app/",
     );
     expect(screen.getByRole("link", { name: "Docs" })).toHaveAttribute(
       "href",
-      "https://docs.ferryline.dev",
+      "https://ferryline-docs.vercel.app/",
     );
     expect(screen.getByRole("link", { name: "GitHub" })).toHaveAttribute(
       "href",
