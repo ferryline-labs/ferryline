@@ -5,6 +5,8 @@ import { Api, type Server } from "@stellar/stellar-sdk/rpc";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  isAllowanceInsufficient,
+  pollPrepareStep,
   submitStellarTransactionWithRejectionRecheck,
   waitForStellarConfirmation,
 } from "./client.js";
@@ -341,5 +343,141 @@ describe("waitForStellarConfirmation", () => {
 
     expect(status).toBe("SUCCESS");
     expect(calls).toBe(2);
+  });
+});
+
+describe("isAllowanceInsufficient", () => {
+  it("is true for a real FerrylineError with code ALLOWANCE_INSUFFICIENT", () => {
+    const error = new Error("the TokenMessengerMinter may spend 0.0 USDC but the burn needs 0.5");
+    (error as { code?: string }).code = "ALLOWANCE_INSUFFICIENT";
+    expect(isAllowanceInsufficient(error)).toBe(true);
+  });
+
+  it("is false for a real FerrylineError with a different code (e.g. STEP_NOT_READY)", () => {
+    const error = new Error("step 1 is not a deferred step");
+    (error as { code?: string }).code = "STEP_NOT_READY";
+    expect(isAllowanceInsufficient(error)).toBe(false);
+  });
+
+  it("is false for a plain Error with no code at all", () => {
+    expect(isAllowanceInsufficient(new Error("network request failed"))).toBe(false);
+  });
+
+  it("is false for a non-Error value", () => {
+    expect(isAllowanceInsufficient("a plain string rejection")).toBe(false);
+    expect(isAllowanceInsufficient({ code: "ALLOWANCE_INSUFFICIENT" })).toBe(false);
+    expect(isAllowanceInsufficient(undefined)).toBe(false);
+  });
+});
+
+describe("pollPrepareStep", () => {
+  it("returns the result on the very first attempt when it succeeds immediately", async () => {
+    let calls = 0;
+    const result = await pollPrepareStep(
+      () => {
+        calls += 1;
+        return Promise.resolve("real-step");
+      },
+      () => true,
+      5,
+      1,
+    );
+    expect(result).toBe("real-step");
+    expect(calls).toBe(1);
+  });
+
+  it("retries exactly as many times as needed when isRetriable keeps returning true, then succeeds", async () => {
+    let calls = 0;
+    const result = await pollPrepareStep(
+      () => {
+        calls += 1;
+        if (calls <= 3) {
+          return Promise.reject(new Error(`not ready yet, attempt ${String(calls)}`));
+        }
+        return Promise.resolve("real-step");
+      },
+      () => true,
+      10,
+      1,
+    );
+    expect(result).toBe("real-step");
+    expect(calls).toBe(4);
+  });
+
+  it("rethrows immediately, without retrying, when isRetriable returns false", async () => {
+    let calls = 0;
+    const nonRetriable = new Error("a real, non-retriable caller bug");
+    await expect(
+      pollPrepareStep(
+        () => {
+          calls += 1;
+          return Promise.reject(nonRetriable);
+        },
+        () => false,
+        10,
+        1,
+      ),
+    ).rejects.toThrow(nonRetriable);
+    expect(calls).toBe(1);
+  });
+
+  it("gives up and rethrows the last real error after maxAttempts if the condition never becomes true", async () => {
+    let calls = 0;
+    await expect(
+      pollPrepareStep(
+        () => {
+          calls += 1;
+          return Promise.reject(new Error(`still not ready, attempt ${String(calls)}`));
+        },
+        () => true,
+        3,
+        1,
+      ),
+    ).rejects.toThrow("still not ready, attempt 3");
+    expect(calls).toBe(3);
+  });
+
+  it("genuinely waits at least pollIntervalMs between retries — a real elapsed-time assertion, not just a call-order one", async () => {
+    let calls = 0;
+    const callTimes: number[] = [];
+    const INTERVAL_MS = 50;
+    await pollPrepareStep(
+      () => {
+        calls += 1;
+        callTimes.push(Date.now());
+        if (calls <= 2) {
+          return Promise.reject(new Error("not ready"));
+        }
+        return Promise.resolve("done");
+      },
+      () => true,
+      5,
+      INTERVAL_MS,
+    );
+    expect(callTimes).toHaveLength(3);
+    expect(callTimes[1]! - callTimes[0]!).toBeGreaterThanOrEqual(INTERVAL_MS);
+    expect(callTimes[2]! - callTimes[1]!).toBeGreaterThanOrEqual(INTERVAL_MS);
+  });
+
+  it("only calls isRetriable with the real error that was actually thrown", async () => {
+    const seenErrors: unknown[] = [];
+    let calls = 0;
+    const realError = new Error("real error instance");
+    await expect(
+      pollPrepareStep(
+        () => {
+          calls += 1;
+          return Promise.reject(realError);
+        },
+        (error) => {
+          seenErrors.push(error);
+          return false;
+        },
+        5,
+        1,
+      ),
+    ).rejects.toThrow(realError);
+    expect(seenErrors).toEqual([realError]);
+    expect(calls).toBe(1);
   });
 });

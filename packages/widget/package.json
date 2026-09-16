@@ -1,6 +1,6 @@
 {
   "name": "@ferryline/widget",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Drop-in web component for depositing to and withdrawing from Stellar over Ferryline.",
   "license": "Apache-2.0",
   "publishConfig": {

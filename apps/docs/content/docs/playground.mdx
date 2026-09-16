@@ -14,8 +14,8 @@ the actual XDR, attestation, and relayer traffic as it happens.
 The playground is deliberately narrow, one real path, not a menu of every rail this project
 supports: **outbound only, Stellar → Ethereum Sepolia, USDC via CCTP.** That's the direction that
 exercises the most real machinery in one flow, per its own on-page copy: the two-step
-approve-then-burn sequence, the [`POST_APPROVE_BUILD_DELAY_MS` retry
-mitigation](/docs/widget#outbound-registration-automatic), and
+approve-then-burn sequence, the real [`prepareStep` polling
+mechanism](/docs/widget#polling-before-the-deferred-burn-step), and
 [`registerOutboundTransfer`](/docs/sdk-reference#registeroutboundtransfer)'s relayer-registration
 path. USDT0 isn't offered here for the same structural reason it isn't offered anywhere on testnet,
 see [Core Concepts](/docs/core-concepts#the-two-rails).

@@ -321,3 +321,68 @@ export async function waitForStellarConfirmation(
     `transaction ${hash} not found after ${String((maxAttempts * pollIntervalMs) / 1000)}s`,
   );
 }
+
+/**
+ * Replaces the old, unvalidated `POST_APPROVE_BUILD_DELAY_MS` fixed-timer wait (removed; see
+ * CHANGELOG.md and PUBLISHING-style incident writeup for the full story of why a fixed timer was
+ * never the right mechanism here). This polls the *actual, specific condition* `prepareStep` needs
+ * before it can build the deferred step — not a generic "enough time has probably passed" proxy.
+ *
+ * For the one real case this applies to today (the outbound CCTP approve -> burn sequence),
+ * `UsdcCctpAdapter.prepareStep` (`packages/sdk/src/rails/usdc-cctp/adapter.ts`) throws a real,
+ * typed `FerrylineError` with `code: "ALLOWANCE_INSUFFICIENT"` — not `STEP_NOT_READY`, which means
+ * a genuinely different, non-retriable caller bug (wrong step index) — specifically and only when
+ * the TokenMessengerMinter's on-chain allowance, as read by whichever RPC node answers this call,
+ * does not yet reflect the just-submitted approve. This is the exact, real, documented contract
+ * `RailAdapter.prepareStep`'s own doc comment describes: "Throws STEP_NOT_READY (or a more specific
+ * code such as ALLOWANCE_INSUFFICIENT) when the chain state it needs is not there yet"
+ * (`packages/core/src/rail.ts`). Retrying on that specific code is polling for the real, textbook
+ * condition, not guessing at a timer long enough to usually cover it.
+ *
+ * Every other error `prepareStep` can throw (including `STEP_NOT_READY` itself) is a real,
+ * non-retriable failure and is rethrown immediately, unwrapped, on the first attempt — this
+ * function only ever retries the one specific, known-transient case.
+ *
+ * Live-validated against a real testnet two-step CCTP transfer (not a mock, not a unit test) —
+ * see `packages/core/verified/experiments/2026-09-16-widget-poll-prepare-step-live.md` for the
+ * real transaction hashes and the real observed retry count/timing.
+ */
+export async function pollPrepareStep<T>(
+  prepareStep: () => Promise<T>,
+  isRetriable: (error: unknown) => boolean,
+  maxAttempts = 20,
+  pollIntervalMs = 1500,
+): Promise<T> {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      return await prepareStep();
+    } catch (error) {
+      if (!isRetriable(error) || attempt === maxAttempts - 1) {
+        throw error;
+      }
+      // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
+      console.log(
+        `[ferryline-widget client] pollPrepareStep retriable failure on attempt ${String(attempt + 1)}/${String(maxAttempts)}, waiting ${String(pollIntervalMs)}ms before retry:`,
+        error instanceof Error ? error.message : error,
+      );
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    }
+  }
+  // Unreachable: the loop above always either returns or throws before falling off the end (the
+  // last-attempt branch above always throws). Present only so TypeScript's control-flow analysis,
+  // which cannot see that guarantee, is satisfied without an `as never`/non-null assertion.
+  throw new Error("pollPrepareStep: exhausted attempts without returning or throwing");
+}
+
+/** True for exactly the one, specific, known-transient `prepareStep` failure this project has
+ *  ever observed and documented — see {@link pollPrepareStep}'s own doc comment. Exported so
+ *  callers other than the widget's own default wiring (a future rail, a test) can reuse the exact
+ *  same real predicate rather than each redefining "is this the CCTP allowance-lag case" slightly
+ *  differently. */
+export function isAllowanceInsufficient(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    (error as { code: unknown }).code === "ALLOWANCE_INSUFFICIENT"
+  );
+}
