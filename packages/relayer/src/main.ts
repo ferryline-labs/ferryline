@@ -1,6 +1,7 @@
 import { cctpEvmChain, createIrisClient, CCTP_STELLAR } from "@ferryline/sdk";
 import { defineChain } from "viem";
 
+import { loadAdminConfig } from "./admin-config.js";
 import { createRelayerEvmRpc } from "./chain/evm-rpc.js";
 import { createRelayerStellarRpc } from "./chain/stellar-rpc.js";
 import {
@@ -32,6 +33,7 @@ import {
 
 const config = loadRelayerConfig();
 const spendConfig = loadSpendConfig();
+const adminConfig = loadAdminConfig();
 const cctp = CCTP_STELLAR[config.network];
 
 // Outbound (Stellar -> EVM) is opt-in per deployment (FERRYLINE_OUTBOUND_ENABLED=true) — see
@@ -213,6 +215,7 @@ const outboundAppOptions: BuildAppOutboundOptions | undefined =
 const app = buildApp({
   repo,
   apiKeys,
+  adminSecret: adminConfig.adminSecret,
   network: config.network,
   rpc,
   sponsorAccount,

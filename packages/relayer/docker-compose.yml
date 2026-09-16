@@ -60,6 +60,7 @@ services:
       DATABASE_URL: postgresql://ferryline:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/ferryline
       FERRYLINE_STELLAR_RPC_URL: ${FERRYLINE_STELLAR_RPC_URL:?set the Soroban RPC endpoint in .env}
       FERRYLINE_SPONSOR_SECRET: ${FERRYLINE_SPONSOR_SECRET:?set the sponsor account's Stellar secret seed in .env — NEVER commit this}
+      FERRYLINE_ADMIN_SECRET: ${FERRYLINE_ADMIN_SECRET:?set a real, separate admin secret in .env for POST/DELETE /admin/api-keys — NEVER reuse an integrator key or the sponsor secrets, NEVER commit this}
       # --- Spend-related, required, NO default per the phase-3/STEP-4 sign-offs ---
       FERRYLINE_MAX_FEE_BUMP_STROOPS: ${FERRYLINE_MAX_FEE_BUMP_STROOPS:?set the per-transfer fee-bump cap, in stroops, in .env}
       FERRYLINE_DAILY_SPEND_CEILING_STROOPS: ${FERRYLINE_DAILY_SPEND_CEILING_STROOPS:?set the daily spend ceiling, in stroops, in .env}

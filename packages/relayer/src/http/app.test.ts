@@ -10,6 +10,7 @@ import { InMemorySpendCeiling } from "../spend/ceiling.js";
 import { InMemoryRegistrationLimiter } from "../spend/registration-limit.js";
 
 const VALID_KEY = "test-key-abc123";
+const ADMIN_SECRET = "test-admin-secret-xyz789";
 const SPONSOR = "GATISXX6BZ6NC7IKQBY37CJD4SOZL3CYZJWXEDG6JVIY4WBS6KXJHN6Q";
 const VALID_TX_HASH = `0x${"a".repeat(64)}`;
 
@@ -68,6 +69,7 @@ function harness(
   const app = buildApp({
     repo,
     apiKeys,
+    adminSecret: ADMIN_SECRET,
     network: "mainnet",
     rpc: fakeRpc(overrides.sponsorBalance),
     sponsorAccount: SPONSOR,

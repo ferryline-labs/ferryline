@@ -13,6 +13,7 @@ import type { TransferRepository } from "../repo/types.js";
 import type { SpendCeiling } from "../spend/ceiling.js";
 import type { RegistrationLimiter } from "../spend/registration-limit.js";
 import type { ApiKeyStore } from "./auth.js";
+import { adminApiKeysRoute } from "./routes/admin-api-keys.js";
 import { getOutboundTransferRoute } from "./routes/get-outbound-transfer.js";
 import { getTransferRoute } from "./routes/get-transfer.js";
 import { healthzRoute, type HealthzOutboundOptions } from "./routes/healthz.js";
@@ -30,6 +31,10 @@ export interface BuildAppOutboundOptions {
 export interface BuildAppOptions {
   readonly repo: TransferRepository;
   readonly apiKeys: ApiKeyStore;
+  /** Gates POST/DELETE /admin/api-keys — see auth.ts's requireAdminSecret and admin-config.ts's own
+   *  doc comment for why this is a genuinely separate, more sensitive credential from anything in
+   *  `apiKeys` above, never interchangeable with an integrator's own key. */
+  readonly adminSecret: string;
   readonly network: CctpNetwork;
   readonly rpc: StellarRpc;
   readonly sponsorAccount: string;
@@ -108,6 +113,10 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
     registrationLimiter: options.registrationLimiter,
   });
   void app.register(getTransferRoute, { repo: options.repo });
+  void app.register(adminApiKeysRoute, {
+    apiKeys: options.apiKeys,
+    adminSecret: options.adminSecret,
+  });
 
   if (options.outbound) {
     const outbound = options.outbound;
