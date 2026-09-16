@@ -22,6 +22,7 @@ import { InMemoryRegistrationLimiter } from "../spend/registration-limit.js";
  */
 
 const VALID_KEY = "test-key-abc123";
+const ADMIN_SECRET = "test-admin-secret-xyz789";
 const SPONSOR = "GATISXX6BZ6NC7IKQBY37CJD4SOZL3CYZJWXEDG6JVIY4WBS6KXJHN6Q";
 const EVM_SPONSOR: `0x${string}` = `0x${"7".repeat(40)}`;
 const STELLAR_TX_HASH = "a".repeat(64);
@@ -69,6 +70,7 @@ function harness(
   const app = buildApp({
     repo,
     apiKeys,
+    adminSecret: ADMIN_SECRET,
     network: "testnet",
     rpc: fakeRpc(),
     sponsorAccount: SPONSOR,

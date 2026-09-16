@@ -59,12 +59,13 @@ Docker Compose or directly with `node dist/main.js`.
 
 **Genuinely required — the relayer refuses to start without these:**
 
-| Variable                    | What it is                                                                                                                                                                                                                       |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `FERRYLINE_NETWORK`         | `"mainnet"` or `"testnet"` — which CCTP network to run against.                                                                                                                                                                  |
-| `DATABASE_URL`              | A Postgres connection string.                                                                                                                                                                                                    |
-| `FERRYLINE_STELLAR_RPC_URL` | The Soroban RPC endpoint to use.                                                                                                                                                                                                 |
-| `FERRYLINE_SPONSOR_SECRET`  | The sponsor account's Stellar secret seed (`S...`). Every `mint_and_forward` fee-bump is signed and paid for by this account. Never a default, never a silently-generated throwaway key — see `src/signer/env-secret-signer.ts`. |
+| Variable                    | What it is                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FERRYLINE_NETWORK`         | `"mainnet"` or `"testnet"` — which CCTP network to run against.                                                                                                                                                                                                                                                                                                                                                               |
+| `DATABASE_URL`              | A Postgres connection string.                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `FERRYLINE_STELLAR_RPC_URL` | The Soroban RPC endpoint to use.                                                                                                                                                                                                                                                                                                                                                                                              |
+| `FERRYLINE_SPONSOR_SECRET`  | The sponsor account's Stellar secret seed (`S...`). Every `mint_and_forward` fee-bump is signed and paid for by this account. Never a default, never a silently-generated throwaway key — see `src/signer/env-secret-signer.ts`.                                                                                                                                                                                              |
+| `FERRYLINE_ADMIN_SECRET`    | Gates `POST`/`DELETE /admin/api-keys` (see below). **Genuinely more sensitive than any integrator API key**: anyone holding this can mint unlimited real, spend-capable integrator keys, all sharing this relayer's one sponsor account and daily spend ceiling. Must be a real, separately-generated secret — never reused from an integrator key or the sponsor secrets above. Never a default — see `src/admin-config.ts`. |
 
 **Spend-related — also required, also NO default.** These control real money movement, so an
 unset value is treated the same as a genuine misconfiguration, not "assume something safe":
@@ -79,7 +80,11 @@ unset value is treated the same as a genuine misconfiguration, not "assume somet
 This refusal is tested, not just documented — see `src/spend/config.test.ts` and
 `src/signer/env-secret-signer.test.ts`, which confirm `loadSpendConfig`/`envSecretSigner` throw for
 every one of these when unset, empty, whitespace-only, zero, negative, or non-numeric, rather than
-silently falling back to anything.
+silently falling back to anything. `FERRYLINE_ADMIN_SECRET`'s own refusal is tested the same way in
+`src/admin-config.test.ts`; `src/http/routes/admin-api-keys.test.ts` separately proves the two
+credential classes can never authenticate each other's routes (a real integrator key is rejected by
+`/admin/api-keys`, and a real, freshly-created key genuinely stops working immediately after
+revocation).
 
 **Allowed sensible defaults — performance/load knobs, not money-safety controls:**
 
@@ -172,23 +177,50 @@ curl http://localhost:8080/healthz
 actually is on the configured network — `balanceUnknown: true` just means that account does not
 exist yet or is not yet funded, not an error in the relayer itself.
 
-### Registering a real testnet transfer
+### Admin: issuing and revoking real integrator API keys
 
-`POST /transfers` requires a bearer token from the `api_keys` table (there is no admin endpoint yet
-— see STEP 2's "not a full auth system" scope). Insert one directly for local testing:
+`POST /transfers` (and every other integrator-facing route) requires a bearer token from the
+`api_keys` table. Two admin-only routes manage that table — gated by `FERRYLINE_ADMIN_SECRET`
+(see above), a genuinely separate, more sensitive credential from any integrator key it issues:
+never the same value, never interchangeable, checked by a completely separate code path
+(`requireAdminSecret` in `src/http/auth.ts`, not `requireApiKey`). This replaces the raw-SQL
+`INSERT` this README used to document as the only way to add a key — still deliberately minimal
+(no sessions, no integrator-facing self-signup, no key rotation UI, no scopes beyond the binary
+admin/integrator split), just no longer requiring direct Postgres write access for every new
+integrator.
+
+**Create a key** — returns the real, usable plaintext key exactly once; it is never stored or
+logged anywhere, so save it immediately, there is no way to retrieve it again after this response:
 
 ```sh
-docker compose exec postgres psql -U ferryline -d ferryline -c \
-  "INSERT INTO api_keys (key_hash, label) VALUES ('$(echo -n 'your-test-key' | sha256sum | cut -d' ' -f1)', 'local-test');"
+curl -X POST http://localhost:8080/admin/api-keys \
+  -H "Authorization: Bearer $FERRYLINE_ADMIN_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"label": "acme-corp-integration"}'
+# {"apiKey": "<the real, usable plaintext key — save this now>", "keyHash": "...", "label": "acme-corp-integration"}
 ```
 
-Then register a real CCTP burn transaction you've already submitted on a supported testnet source
+Hand `apiKey` to the integrator over whatever channel you already use; it is what they set as
+`relayer-api-key` on `<ferryline-widget>` or pass as their own `Authorization: Bearer` header.
+
+**Revoke a key** — idempotent (revoking an already-revoked or unknown `keyHash` still returns
+`204`, not an error), and takes effect immediately: the very next request bearing that key's
+plaintext is rejected with `401`:
+
+```sh
+curl -X DELETE http://localhost:8080/admin/api-keys/<the keyHash from the create response> \
+  -H "Authorization: Bearer $FERRYLINE_ADMIN_SECRET"
+```
+
+### Registering a real testnet transfer
+
+Register a real CCTP burn transaction you've already submitted on a supported testnet source
 chain (see `@ferryline/sdk`'s `CCTP_EVM_CHAINS` for the current testnet list — `ethereum-sepolia`,
 `arbitrum-sepolia`, `base-sepolia`, `polygon-amoy`):
 
 ```sh
 curl -X POST http://localhost:8080/transfers \
-  -H "Authorization: Bearer your-test-key" \
+  -H "Authorization: Bearer <the real apiKey from the admin create-key response above>" \
   -H "Content-Type: application/json" \
   -d '{
     "transferId": "<a real ULID — see @ferryline/core newTransferId()>",
