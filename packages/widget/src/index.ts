@@ -11,9 +11,12 @@
  *   -> relayer.ts (real POST /transfers + GET /transfers/:id polling for inbound CCTP tracking)
  *
  * Attributes: `network` ("testnet" | "mainnet", default "testnet"), `rpc-url`, `relayer-url`,
- * `relayer-api-key`. Config beyond that (asset, from/to, amount) is set imperatively via the
- * `request` property — see `set request()` below — since a full TransferRequest doesn't serialize
- * cleanly to a single HTML attribute.
+ * `relayer-api-key`, `prepare-step-poll-max-attempts`, `prepare-step-poll-interval-ms` (the last
+ * two configure {@link pollPrepareStep}'s real, live-validated retry mechanism for the outbound
+ * CCTP approve -> burn sequence — see that function's own doc comment in client.ts). Config beyond
+ * that (asset, from/to, amount) is set imperatively via the `request` property — see
+ * `set request()` below — since a full TransferRequest doesn't serialize cleanly to a single HTML
+ * attribute.
  */
 import { formatAmount } from "@ferryline/core";
 import type { ChainSlug } from "@ferryline/core";
@@ -29,7 +32,12 @@ import type {
   TransferStage,
 } from "@ferryline/sdk";
 
-import { createWidgetClient, type WidgetClient } from "./client.js";
+import {
+  createWidgetClient,
+  isAllowanceInsufficient,
+  pollPrepareStep,
+  type WidgetClient,
+} from "./client.js";
 import { GENERATED_STYLE } from "./generated-style.js";
 import { buildPreviewSummary, type PreviewSummary } from "./preview.js";
 import { registerTransfer, trackRelayerTransfer, type RelayerConfig } from "./relayer.js";
@@ -150,47 +158,57 @@ function isOutboundCctp(quote: Quote): boolean {
 }
 
 /**
- * Deliberate pause, in `afterStepSubmitted` below, specifically between a Stellar step's confirmed
- * on-chain landing and building/submitting the very next Stellar step in the same transfer (today,
- * this is only the outbound CCTP approve -> burn sequence — see `usdc-cctp/adapter.ts`'s own
- * `stellar-transaction-deferred` step, the only place in this codebase two Stellar transactions from
- * the same account are submitted back to back).
+ * Real, load-bearing default for how `afterStepSubmitted` below waits before building the very
+ * next Stellar step in the same transfer (today, this is only the outbound CCTP approve -> burn
+ * sequence — see `usdc-cctp/adapter.ts`'s own `stellar-transaction-deferred` step, the only place
+ * in this codebase two Stellar transactions from the same account are submitted back to back).
  *
- * Why this exists — stated plainly, with the honesty standard this project already holds every
- * platform finding to: this is an EMPIRICALLY OBSERVED PATTERN, not a documented Soroban/Stellar
- * platform behavior. A real verification pass (this widget's own real testnet E2E testing, plus a
- * direct search of Stellar's official developer docs — the RPC `sendTransaction` reference, the
- * account/sequence-number fundamentals page, the transaction lifecycle page, the Stellar blog's own
- * "Proposed Changes To Transaction Submission" post, and the official `stellar-dev` dapp-development
- * skill's own reference `submitSorobanTransaction` implementation) found NO official documentation of
- * "the RPC node's own account/sequence-number state can temporarily lag the network's actual current
- * state for a transaction submitted immediately after a prior one from the same account" — the
- * official reference implementation itself throws immediately on any `ERROR` status, with no retry or
- * delay guidance at all.
+ * **History, disclosed plainly rather than silently replaced:** this used to be a fixed-timer wait
+ * (`POST_APPROVE_BUILD_DELAY_MS`, first 3000ms, then bumped to 15000ms based on one live RPC-lag
+ * measurement). That fixed-timer mechanism shipped to real npm consumers (`@ferryline/widget@0.1.0`
+ * / `0.1.1`) without ever being live-validated against a real, two-step testnet transfer — its own
+ * introducing commit said as much outright ("this fix has NOT yet been validated against a real
+ * live testnet re-run"). An external, independent integration test caught this: a fresh testnet
+ * account hit `tx_bad_seq` 100% of the time at the shipped 15-second default. Root-caused: this
+ * project's own one real two-step reference transaction
+ * (`c7463fbdc056a7c22f20cd1845fe8109d409699ed72a39809c1976577a6b6ff8`, cited in
+ * `apps/docs/content/docs/bridge-walkthrough.mdx`) took a real 180 real-world seconds between the
+ * approve confirming and the burn landing — but that transaction predates the fixed-delay mechanism
+ * entirely by two days and was never protected by it; it was protected by a *different* mechanism
+ * (`waitForStellarConfirmation`, polling for the approve's own ledger confirmation before returning
+ * control at all). No experiment in this repo's real transaction history has ever exercised the
+ * fixed-delay code path against a real network. See `packages/widget/CHANGELOG.md`'s `0.1.2` entry
+ * for the full incident writeup.
  *
- * What IS real: every `tx_bad_seq` rejection observed during this widget's own real testnet
- * E2E testing (many, across multiple sessions) was the SECOND of two Stellar transactions
- * submitted back to back from the same account — the approve confirming, then the burn being built
- * and submitted immediately after. Some of those were false rejections (the transaction had, in
- * fact, landed — confirmed independently via Horizon); others were genuine failures (the
- * transaction never landed even after the rejection-recheck fix's own bounded retries) — see
- * `submitStellarTransactionWithRejectionRecheck`'s own doc comment in client.ts for that fix, which
- * remains the correct backstop here regardless of this delay's effect. This delay is a mitigation
- * aimed at reducing how often the false-rejection class happens in the first place, reasoned from
- * that real, repeated pattern — not a confirmed fix for a documented platform issue.
+ * **What replaced it:** `client.ts`'s `pollPrepareStep`, which retries `prepareStep` itself on the
+ * one specific, real, typed error it throws exactly when the chain state it needs (the
+ * TokenMessengerMinter's on-chain allowance, as read by whichever RPC node answers the call) is not
+ * there yet — `FerrylineError` with `code: "ALLOWANCE_INSUFFICIENT"` (see
+ * `packages/core/src/rail.ts`'s own `RailAdapter.prepareStep` doc comment, which documents exactly
+ * this as the real, intended signal). This polls for the actual, specific condition that must be
+ * true, not a fixed amount of time that might or might not be enough — the same structural
+ * difference between "wait 15 seconds and hope" and "ask the chain directly, repeatedly, until it
+ * says yes." Live-validated against a real testnet two-step CCTP transfer — see
+ * `packages/core/verified/experiments/2026-09-16-widget-poll-prepare-step-live.md` for the real
+ * transaction hashes and the real observed retry count/timing before publishing this fix.
  *
- * The 3000ms this constant started at was itself found insufficient by further real testing: this
- * exact `tx_bad_seq` rejection kept recurring even with that delay in place. A direct, live
- * measurement taken during that investigation (comparing `getLatestLedger` on
- * `soroban-testnet.stellar.org` against Horizon's own latest ledger at the same moment) found this
- * public RPC endpoint genuinely running about 2 ledgers, roughly 10-12 real seconds, behind the
- * actual network — a real, current lag on this specific node at that time, not a one-off. Bumped to
- * 15000ms to sit comfortably above that measured gap. This value is a snapshot of one measurement,
- * not a guaranteed bound — the lag can vary, and `submitStellarTransactionWithRejectionRecheck`'s
- * own bounded retry/recheck (client.ts) is the actual, correct safety net that still applies
- * regardless of whether this delay turns out to be enough on any given real run.
+ * These two constants are the poll's real, documented defaults — 20 attempts at 1500ms apart, a
+ * 30-second total budget. This is NOT sized against the 180-second approve-to-burn WALL-CLOCK gap
+ * in the reference transaction above — that figure includes real human click-through time between
+ * two separate wallet-signing prompts, not pure RPC allowance-visibility lag, and is not the right
+ * number to size a machine poll against. It's sized instead against what this project's own real
+ * testing has actually observed for allowance-visibility lag specifically (single-digit to
+ * low-double-digit seconds), with headroom, since a poll that returns as soon as the real condition
+ * is true costs nothing extra for retrying "too many times" the way a fixed timer costs waiting
+ * the full amount even when it wasn't needed. Both are real, documented, PUBLIC widget
+ * configuration — `prepare-step-poll-max-attempts` and `prepare-step-poll-interval-ms`
+ * attributes/properties, see `attributeChangedCallback` and the getters below — unlike the old
+ * `POST_APPROVE_BUILD_DELAY_MS`, which was deliberately never exposed. An integrator whose own RPC
+ * node has worse allowance-visibility lag than this project's own testing observed can raise either
+ * value without waiting on a new widget release.
  */
-const POST_APPROVE_BUILD_DELAY_MS = 15000;
+const DEFAULT_PREPARE_STEP_POLL_MAX_ATTEMPTS = 20;
+const DEFAULT_PREPARE_STEP_POLL_INTERVAL_MS = 1500;
 
 export class FerrylineWidget extends HTMLElement {
   static readonly observedAttributes = [
@@ -198,6 +216,8 @@ export class FerrylineWidget extends HTMLElement {
     "rpc-url",
     "relayer-url",
     "relayer-api-key",
+    "prepare-step-poll-max-attempts",
+    "prepare-step-poll-interval-ms",
   ] as const;
 
   #client: WidgetClient | undefined;
@@ -243,16 +263,6 @@ export class FerrylineWidget extends HTMLElement {
    */
   testClientOverride: WidgetClient | undefined;
   testWalletOverride: WalletSession | undefined;
-  /**
-   * Test-only override for `POST_APPROVE_BUILD_DELAY_MS` (see that constant's own doc comment for
-   * why the real delay exists). NOT a real, documented widget config option — deliberately not
-   * exposed as an attribute/property in the public docs, since the real 3-second default is an
-   * internal mitigation for observed RPC timing behavior, not something an integrator should be
-   * expected to tune. Exists purely so index.test.ts can prove the delay is genuinely applied
-   * without a real multi-second wait per test run. `undefined` (the real, shipped default) means
-   * "use the real constant" — see `afterStepSubmitted`'s own use of this field below.
-   */
-  testPostApproveBuildDelayMsOverride: number | undefined;
 
   connectedCallback(): void {
     this.render();
@@ -284,6 +294,22 @@ export class FerrylineWidget extends HTMLElement {
 
   private get relayerApiKey(): string | undefined {
     return this.getAttribute("relayer-api-key") ?? undefined;
+  }
+
+  /** Real, public config for {@link pollPrepareStep} (see `client.ts`) — see
+   *  `DEFAULT_PREPARE_STEP_POLL_MAX_ATTEMPTS`'s own doc comment above for why this exists and what
+   *  it replaced. An invalid or non-positive value (unparseable, zero, negative) falls back to the
+   *  real default rather than silently producing a poll that never runs or runs forever. */
+  private get prepareStepPollMaxAttempts(): number {
+    const raw = this.getAttribute("prepare-step-poll-max-attempts");
+    const parsed = raw === null ? NaN : Number(raw);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PREPARE_STEP_POLL_MAX_ATTEMPTS;
+  }
+
+  private get prepareStepPollIntervalMs(): number {
+    const raw = this.getAttribute("prepare-step-poll-interval-ms");
+    const parsed = raw === null ? NaN : Number(raw);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PREPARE_STEP_POLL_INTERVAL_MS;
   }
 
   /** Rail-agnostic request. Set imperatively (`el.request = {...}`) — see class doc comment. */
@@ -508,18 +534,17 @@ export class FerrylineWidget extends HTMLElement {
         signedAwaitingNextStep({ quote, built, stepIndex: nextIndex }),
         generation,
       );
-      // Real, empirically observed pattern (not an officially documented Soroban RPC behavior —
-      // see POST_APPROVE_BUILD_DELAY_MS's own doc comment for the full honesty caveat): pause here,
-      // between the just-confirmed step's on-chain landing and building/submitting the very next
-      // step, specifically because this exact back-to-back-submission shape is what every real
-      // tx_bad_seq rejection observed during this widget's own testnet testing had in common.
-      await new Promise((resolve) =>
-        setTimeout(
-          resolve,
-          this.testPostApproveBuildDelayMsOverride ?? POST_APPROVE_BUILD_DELAY_MS,
-        ),
+      // Poll for the real, specific condition prepareStep needs — see pollPrepareStep's and
+      // DEFAULT_PREPARE_STEP_POLL_MAX_ATTEMPTS's own doc comments for the full incident writeup on
+      // why this replaced a fixed-timer wait. isAllowanceInsufficient is the only retriable case;
+      // every other failure (including a genuine STEP_NOT_READY, a real caller bug) rethrows on the
+      // very first attempt.
+      const nextStep = await pollPrepareStep(
+        () => this.client().ferryline.prepareStep(built.transferId, nextIndex),
+        isAllowanceInsufficient,
+        this.prepareStepPollMaxAttempts,
+        this.prepareStepPollIntervalMs,
       );
-      const nextStep = await this.client().ferryline.prepareStep(built.transferId, nextIndex);
       const rebuilt = {
         ...built,
         steps: built.steps.map((s, i) => (i === nextIndex ? nextStep : s)),

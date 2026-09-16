@@ -36,7 +36,7 @@ const RELAYER_API_KEY = process.env["NEXT_PUBLIC_FERRYLINE_RELAYER_API_KEY"];
 /**
  * Outbound (Stellar -> Ethereum Sepolia), not inbound: the direction that actually exercises the
  * mechanisms this playground exists to demonstrate — the two-step approve/burn sequence (and its
- * real POST_APPROVE_BUILD_DELAY_MS mitigation, surfaced live by RetryDelayNote), and
+ * real pollPrepareStep mitigation, surfaced live by RetryDelayNote), and
  * registerOutboundTransfer's real relayer registration path. `maxFee`/`minFinalityThreshold` are
  * the two real, independently-confirmed-working values from this project's own Security &
  * Verification page (apps/docs/content/docs/security.mdx) — CCTP requires both on every request

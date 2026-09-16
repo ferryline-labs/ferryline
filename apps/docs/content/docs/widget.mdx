@@ -96,12 +96,14 @@ read hooks (`window.__ferrylineTestHooks`)" for the Playwright script to read re
 
 ## Attributes
 
-| Attribute         | Values                       | Default         | Notes                                                                                                                                                                                                   |
-| ----------------- | ---------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `network`         | `testnet` \| `mainnet`       | `testnet`       | Changing it tears down and rebuilds the widget's internal client/wallet session.                                                                                                                        |
-| `rpc-url`         | a Soroban RPC URL            | network default | Override if you run your own RPC node.                                                                                                                                                                  |
-| `relayer-url`     | a Ferryline relayer base URL | —               | Used for **both** directions: required for inbound (EVM → Stellar) CCTP tracking (see `registerInboundTransfer` below), and enables automatic outbound (Stellar → EVM) registration if set (see below). |
-| `relayer-api-key` | a bearer token               | —               | Sent as `Authorization: Bearer <key>` to the relayer.                                                                                                                                                   |
+| Attribute                        | Values                           | Default         | Notes                                                                                                                                                                                                   |
+| -------------------------------- | -------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `network`                        | `testnet` \| `mainnet`           | `testnet`       | Changing it tears down and rebuilds the widget's internal client/wallet session.                                                                                                                        |
+| `rpc-url`                        | a Soroban RPC URL                | network default | Override if you run your own RPC node.                                                                                                                                                                  |
+| `relayer-url`                    | a Ferryline relayer base URL     | —               | Used for **both** directions: required for inbound (EVM → Stellar) CCTP tracking (see `registerInboundTransfer` below), and enables automatic outbound (Stellar → EVM) registration if set (see below). |
+| `relayer-api-key`                | a bearer token                   | —               | Sent as `Authorization: Bearer <key>` to the relayer.                                                                                                                                                   |
+| `prepare-step-poll-max-attempts` | a positive integer               | `20`            | See [Polling before the deferred burn step](#polling-before-the-deferred-burn-step) below. Raise it if your own RPC node has worse allowance-visibility lag than this project's testing observed.       |
+| `prepare-step-poll-interval-ms`  | milliseconds, a positive integer | `1500`          | Same section as above. A non-positive or unparseable value on either attribute falls back to its real default rather than producing a poll that never runs or runs forever.                             |
 
 In `network="testnet"` mode, only the `usdc-cctp` rail is ever registered — the widget's internal
 client only constructs a `UsdcCctpAdapter` in testnet mode, so there's no code path where a testnet
@@ -141,6 +143,31 @@ async registerInboundTransfer(
 }
 ```
 
+## Polling before the deferred burn step
+
+For a fresh account (no prior USDC allowance to the TokenMessengerMinter), the outbound CCTP flow
+is two Stellar transactions submitted back to back from the same account: `approve`, then the
+actual `deposit_for_burn`. The burn's own on-chain footprint can't be simulated until the approve's
+allowance genuinely exists, so it's assembled by a real, separate `prepareStep` call after the
+approve confirms, not built up front alongside it.
+
+**This used to be a fixed-timer wait** (`POST_APPROVE_BUILD_DELAY_MS`, 15 seconds in
+`@ferryline/widget@0.1.0`/`0.1.1`), removed after an external, independent integration test caught
+it failing 100% of the time on a genuinely fresh testnet account at that shipped default — the
+fixed timer had, in fact, never been validated against a real, live, two-step testnet transfer
+before shipping. See `packages/widget/CHANGELOG.md`'s `0.1.2` entry for the full incident writeup.
+
+**What it does now:** polls `prepareStep` itself, retrying only on the one specific, real, typed
+error it throws exactly when the chain state it needs isn't there yet —
+`FerrylineError` with `code: "ALLOWANCE_INSUFFICIENT"` (documented directly on
+`RailAdapter.prepareStep`'s own interface in `@ferryline/core`). Every other failure — including a
+genuine `STEP_NOT_READY` (a real caller bug, not a timing issue) — is rethrown immediately, on the
+first attempt, never retried. `prepare-step-poll-max-attempts` and `prepare-step-poll-interval-ms`
+(see [Attributes](#attributes) above) are the real, public config for this poll's bound and
+interval; both are live-validated against a real testnet transfer, not just unit-tested — see
+[the real, dated experiment record](https://github.com/ferryline-labs/ferryline/blob/main/packages/core/verified/experiments/2026-09-16-widget-poll-prepare-step-live.md)
+for the real transaction hashes and observed retry count/timing.
+
 ## Outbound registration (automatic)
 
 Unlike inbound, you don't call anything for outbound. Once the final step of an outbound
@@ -148,8 +175,8 @@ Unlike inbound, you don't call anything for outbound. Once the final step of an 
 calls `@ferryline/sdk`'s `Ferryline.registerOutboundTransfer()` on your behalf. The code below is
 the real, current body of `packages/widget/src/index.ts`'s own `afterStepSubmitted`, copied
 verbatim (only re-indented; its own inline comments are trimmed here — the full version explains
-the historical double-registration bug this exact `isFinalStep` check exists to prevent, the
-deliberate delay before the deferred step, and the request-generation staleness guard, see that
+the historical double-registration bug this exact `isFinalStep` check exists to prevent, the poll
+before the deferred step described above, and the request-generation staleness guard, see that
 method's own doc comment in the real file for the complete story). `isFinalStep` is imported from
 `@ferryline/sdk` — the same canonical helper documented on the
 [SDK Reference](/docs/sdk-reference#isfinalstep) page — this file does not hand-roll its own
@@ -163,10 +190,12 @@ if (!isFinalStep(built, stepIndex)) {
     generation,
   );
   // [comment trimmed — see the real source for the full explanation]
-  await new Promise((resolve) =>
-    setTimeout(resolve, this.testPostApproveBuildDelayMsOverride ?? POST_APPROVE_BUILD_DELAY_MS),
+  const nextStep = await pollPrepareStep(
+    () => this.client().ferryline.prepareStep(built.transferId, nextIndex),
+    isAllowanceInsufficient,
+    this.prepareStepPollMaxAttempts,
+    this.prepareStepPollIntervalMs,
   );
-  const nextStep = await this.client().ferryline.prepareStep(built.transferId, nextIndex);
   const rebuilt = {
     ...built,
     steps: built.steps.map((s, i) => (i === nextIndex ? nextStep : s)),

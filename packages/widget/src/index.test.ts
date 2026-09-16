@@ -1,4 +1,5 @@
 import { amount, InMemoryTransferStore, newTransferId } from "@ferryline/core";
+import { FerrylineError } from "@ferryline/sdk";
 import type {
   BuiltTransfer,
   Quote,
@@ -773,11 +774,11 @@ describe("ferryline-widget — registerOutboundTransfer fires exactly once, on t
     el.testClientOverride = client;
     el.testWalletOverride = wallet;
     // This suite's own two-step transfers go through afterStepSubmitted's real deferred-step
-    // branch, which now (see POST_APPROVE_BUILD_DELAY_MS in index.ts) waits a real, deliberate
-    // delay between the approve confirming and the burn's preview re-appearing. The real,
-    // production default (15s) would make every test here far exceed vi.waitFor's own timeout;
-    // this override keeps the suite fast while still exercising the real await.
-    el.testPostApproveBuildDelayMsOverride = 1;
+    // branch, which now polls prepareStep (see pollPrepareStep in client.ts) instead of waiting a
+    // fixed delay. This fixture's own prepareStep never throws ALLOWANCE_INSUFFICIENT, so the poll
+    // succeeds on its first real attempt — no interval wait is ever incurred, so no attribute
+    // override is needed here to keep the suite fast (unlike the old fixed-timer mechanism, which
+    // always waited the configured amount regardless of whether it was needed).
     document.body.append(el);
     return { el, adapter, registeredTransferIds, registeredSourceTxHashes };
   }
@@ -1048,16 +1049,16 @@ describe("ferryline-widget — a stale, abandoned submission cannot clobber a ne
   });
 });
 
-describe("ferryline-widget — deliberate delay before building the step right after a confirmed Stellar step", () => {
+describe("ferryline-widget — polling prepareStep on ALLOWANCE_INSUFFICIENT before building the step right after a confirmed Stellar step", () => {
   /**
-   * Real, deliberate mitigation (see POST_APPROVE_BUILD_DELAY_MS's own doc comment in index.ts for
-   * the full honesty caveat: an empirically observed pattern, not a documented Soroban RPC platform
-   * behavior) for the real tx_bad_seq class of rejection this project's own real testnet E2E testing
-   * hit repeatedly, every time on the SECOND of two Stellar transactions submitted back to back from
-   * the same account (the outbound CCTP approve -> burn sequence). These tests use
-   * `testPostApproveBuildDelayMsOverride` (test-only; the real, shipped default is
-   * POST_APPROVE_BUILD_DELAY_MS = 3000) so the suite proves the delay is genuinely applied without
-   * needing a real multi-second wait per run.
+   * Real replacement for the old fixed-timer POST_APPROVE_BUILD_DELAY_MS wait (removed — see
+   * pollPrepareStep's and DEFAULT_PREPARE_STEP_POLL_MAX_ATTEMPTS's own doc comments in index.ts and
+   * client.ts for the full incident writeup: the fixed timer shipped to real npm consumers without
+   * ever being live-validated, and an external integration test caught it failing 100% of the time
+   * at the shipped default). These tests set the real, public
+   * prepare-step-poll-interval-ms/prepare-step-poll-max-attempts attributes directly (not a
+   * test-only field — there is no longer one, by design, since this config is now real and public)
+   * to keep the suite fast while still exercising the genuine retry loop and its real elapsed time.
    */
   function twoStepBuiltFixture(): {
     readonly built: BuiltTransfer;
@@ -1108,14 +1109,18 @@ describe("ferryline-widget — deliberate delay before building the step right a
     return { built, nextStep };
   }
 
-  it("a two-step transfer (approve -> burn) genuinely waits the full delay before prepareStep is called for the burn", async () => {
+  it("a two-step transfer (approve -> burn) genuinely retries prepareStep on ALLOWANCE_INSUFFICIENT, at the configured interval, until it succeeds", async () => {
     const { el, adapter, wallet } = makeElement();
     const { built, nextStep } = twoStepBuiltFixture();
     adapter.statuses = [
       { transferId: "" as TransferId, stage: "submitted", updatedAt: Date.now() },
     ];
-    let prepareStepCalled = false;
-    let prepareStepCallTime: number | undefined;
+    let prepareStepCallCount = 0;
+    const prepareStepCallTimes: number[] = [];
+    // Real, load-bearing fixture shape: the first two attempts throw the exact real error
+    // UsdcCctpAdapter.prepareStep throws (see client.ts's own isAllowanceInsufficient doc comment)
+    // — not a generic Error, not STEP_NOT_READY — so this test proves the poll's real error-code
+    // matching, not just "retries on any failure."
     const client: WidgetClient = {
       ferryline: {
         config: { network: "testnet", rpcUrl: "https://soroban-testnet.stellar.org" },
@@ -1125,8 +1130,16 @@ describe("ferryline-widget — deliberate delay before building the step right a
         registerOutboundTransfer: () => Promise.resolve({ registered: true }),
         track: (id: TransferId, signal?: AbortSignal) => adapter.track(id, signal),
         prepareStep: () => {
-          prepareStepCalled = true;
-          prepareStepCallTime = Date.now();
+          prepareStepCallCount += 1;
+          prepareStepCallTimes.push(Date.now());
+          if (prepareStepCallCount <= 2) {
+            return Promise.reject(
+              new FerrylineError(
+                "ALLOWANCE_INSUFFICIENT",
+                "the TokenMessengerMinter may spend 0.0000000 USDC ... but the burn needs 0.5000000",
+              ),
+            );
+          }
           return Promise.resolve(nextStep);
         },
       } as never,
@@ -1136,10 +1149,11 @@ describe("ferryline-widget — deliberate delay before building the step right a
     };
     el.testClientOverride = client;
     // Deliberately large relative to this suite's own real overhead (state transitions, promise
-    // microtasks — all comfortably sub-10ms in practice) so a mutation that removes the delay
+    // microtasks — all comfortably sub-10ms in practice) so a mutation that removes the retry wait
     // entirely produces a clearly, reliably too-small elapsed time below, not a flaky near-miss.
-    const DELAY_MS = 300;
-    el.testPostApproveBuildDelayMsOverride = DELAY_MS;
+    const INTERVAL_MS = 300;
+    el.setAttribute("prepare-step-poll-interval-ms", String(INTERVAL_MS));
+    el.setAttribute("prepare-step-poll-max-attempts", "5");
 
     el.request = REQUEST;
     await vi.waitFor(() =>
@@ -1153,24 +1167,78 @@ describe("ferryline-widget — deliberate delay before building the step right a
         el.shadowRoot?.querySelector('[part="confirm-button"]')?.hasAttribute("disabled"),
       ).toBe(false),
     );
-    // Captured right at the click that starts the timed sequence (signing -> submit -> markSubmitted
-    // -> the delay itself -> prepareStep) — NOT earlier, so this measures only the real work this
-    // delay is gating, not the whole test's unrelated quote/build/wallet-connect setup time.
-    const startTime = Date.now();
     el.shadowRoot?.querySelector<HTMLButtonElement>('[part="confirm-button"]')?.click();
 
-    await vi.waitFor(() => expect(prepareStepCalled).toBe(true));
-    const elapsed = (prepareStepCallTime ?? 0) - startTime;
-    // Genuinely waited at least the configured delay (not zero, not skipped) — a real elapsed-time
-    // assertion, not just a call-order assertion, per the requirement that this be a genuine wait.
-    // (Verified via a real mutation test: removing the delay entirely drops this well under 50ms,
-    // comfortably below DELAY_MS, reliably failing this assertion — see the fix's own commit.)
-    expect(elapsed).toBeGreaterThanOrEqual(DELAY_MS);
+    await vi.waitFor(() => expect(prepareStepCallCount).toBe(3));
+    // Genuinely retried exactly twice (not zero, not looped forever) — a real call-count assertion,
+    // and each retry genuinely waited at least the configured interval — a real elapsed-time
+    // assertion between consecutive attempts, not just a call-order assertion. (Verified via a real
+    // mutation test: removing the interval wait entirely drops these gaps well under 50ms,
+    // comfortably below INTERVAL_MS, reliably failing this assertion.)
+    expect(prepareStepCallTimes).toHaveLength(3);
+    expect(prepareStepCallTimes[1]! - prepareStepCallTimes[0]!).toBeGreaterThanOrEqual(INTERVAL_MS);
+    expect(prepareStepCallTimes[2]! - prepareStepCallTimes[1]!).toBeGreaterThanOrEqual(INTERVAL_MS);
 
-    // The transfer still completes correctly afterward — the delay doesn't break the flow, it only
-    // postpones this one step.
+    // The transfer still completes correctly once the poll succeeds — retrying doesn't break the
+    // flow, it only postpones this one step until the real condition is met.
     await vi.waitFor(() => expect(el.shadowRoot?.querySelector('[part="preview"]')).not.toBeNull());
     expect(wallet.signedXdr).toBeDefined();
+    el.remove();
+  });
+
+  it("a non-retriable prepareStep failure (a real caller bug, e.g. STEP_NOT_READY) is rethrown on the very first attempt, never retried", async () => {
+    const { el, adapter } = makeElement();
+    const { built } = twoStepBuiltFixture();
+    adapter.statuses = [
+      { transferId: "" as TransferId, stage: "submitted", updatedAt: Date.now() },
+    ];
+    let prepareStepCallCount = 0;
+    const client: WidgetClient = {
+      ferryline: {
+        config: { network: "testnet", rpcUrl: "https://soroban-testnet.stellar.org" },
+        quote: (r: TransferRequest) => adapter.quote(r),
+        build: () => Promise.resolve(built),
+        markSubmitted: () => Promise.resolve(),
+        registerOutboundTransfer: () => Promise.resolve({ registered: true }),
+        track: (id: TransferId, signal?: AbortSignal) => adapter.track(id, signal),
+        prepareStep: () => {
+          prepareStepCallCount += 1;
+          return Promise.reject(
+            new FerrylineError("STEP_NOT_READY", "step 1 of this transfer is not a deferred step"),
+          );
+        },
+      } as never,
+      availableRails: ["usdc-cctp"],
+      networkPassphrase: NETWORK_PASSPHRASE,
+      submitStellarTransaction: () => Promise.resolve("fake-source-tx-hash"),
+    };
+    el.testClientOverride = client;
+    // A large interval that would make this test time out if the (wrong) code incorrectly retried
+    // this non-retriable error even once — proves the "rethrow immediately" path, not just that it
+    // eventually resolves.
+    el.setAttribute("prepare-step-poll-interval-ms", "5000");
+    el.setAttribute("prepare-step-poll-max-attempts", "5");
+
+    el.request = REQUEST;
+    await vi.waitFor(() =>
+      expect(el.shadowRoot?.querySelector('[part="build-button"]')).not.toBeNull(),
+    );
+    el.shadowRoot?.querySelector<HTMLButtonElement>('[part="build-button"]')?.click();
+    await vi.waitFor(() => expect(el.shadowRoot?.querySelector('[part="preview"]')).not.toBeNull());
+    el.shadowRoot?.querySelector<HTMLButtonElement>('[data-wallet-module="freighter"]')?.click();
+    await vi.waitFor(() =>
+      expect(
+        el.shadowRoot?.querySelector('[part="confirm-button"]')?.hasAttribute("disabled"),
+      ).toBe(false),
+    );
+    el.shadowRoot?.querySelector<HTMLButtonElement>('[part="confirm-button"]')?.click();
+
+    await vi.waitFor(() => expect(prepareStepCallCount).toBe(1));
+    // Give the (deliberately absent) retry loop a real chance to fire if the code were wrong —
+    // comfortably longer than any real microtask/state-transition overhead, still well under the
+    // 5000ms interval that would be required for even one real retry.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(prepareStepCallCount).toBe(1);
     el.remove();
   });
 
@@ -1206,10 +1274,12 @@ describe("ferryline-widget — deliberate delay before building the step right a
       submitStellarTransaction: () => Promise.resolve("fake-source-tx-hash"),
     };
     el.testClientOverride = client;
-    // Deliberately left as a large value: if the (single-step) code path incorrectly applied the
-    // delay here, this test would time out and fail loudly rather than silently pass on a
-    // coincidentally-fast run.
-    el.testPostApproveBuildDelayMsOverride = 5000;
+    // Deliberately left as a large value: if the (single-step) code path incorrectly called
+    // prepareStep (and therefore incorrectly entered the poll) here at all, this fixture's own
+    // prepareStep rejects immediately, so this test would fail on the assertion below rather than
+    // silently pass — the large interval just guards against a slow-poll false pass if it somehow
+    // did enter the poll and this fixture's rejection were mistaken for ALLOWANCE_INSUFFICIENT.
+    el.setAttribute("prepare-step-poll-interval-ms", "5000");
     const startTime = Date.now();
 
     el.request = REQUEST;
@@ -1231,8 +1301,9 @@ describe("ferryline-widget — deliberate delay before building the step right a
     });
     const elapsed = Date.now() - startTime;
     expect(prepareStepCalled).toBe(false);
-    // Completed fast — nowhere near the 5s override, proving that override is never consulted on
-    // this path at all (this is the USDT0 / single-step-CCTP shape: no deferred step exists).
+    // Completed fast — nowhere near the 5s poll interval, proving prepareStep (and therefore the
+    // poll) is never consulted on this path at all (this is the USDT0 / single-step-CCTP shape: no
+    // deferred step exists).
     expect(elapsed).toBeLessThan(2000);
     expect(wallet.signedXdr).toBeDefined();
     el.remove();
