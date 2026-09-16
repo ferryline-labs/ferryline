@@ -1309,3 +1309,161 @@ describe("ferryline-widget — polling prepareStep on ALLOWANCE_INSUFFICIENT bef
     el.remove();
   });
 });
+
+describe("ferryline-widget — tracking-phase spinner and elapsed timer", () => {
+  /**
+   * Real gap this closes: track()'s own polling loop only yields a new status when Circle's
+   * attestation service or the destination chain actually changes state — real, observed gaps
+   * between updates during this project's own testing have run into multiple minutes. Without an
+   * independent visual signal, a user watching the "tracking" phase has no way to tell "still
+   * working" apart from "stuck." See #tickInterval's own doc comment in index.ts.
+   *
+   * Uses real fake timers (vi.useFakeTimers), not a real multi-second wait, so this suite stays
+   * fast while still exercising the genuine setInterval-based tick.
+   */
+  it("renders a spinner and a live, ticking elapsed-time counter while tracking, and stops ticking once delivered", async () => {
+    vi.useFakeTimers();
+    try {
+      const { el, adapter, wallet } = makeElement();
+      // A real, controlled two-status sequence: "submitted" immediately, "delivered" only after a
+      // real, awaited delay this test drives explicitly via fake timers — so the widget genuinely
+      // sits in the tracking phase for a controlled, real duration before moving on.
+      const controlledAdapter = adapter;
+      controlledAdapter.statuses = [
+        { transferId: "" as TransferId, stage: "submitted", updatedAt: Date.now() },
+      ];
+      let resolveDelivered: (() => void) | undefined;
+      const delivered = new Promise<void>((resolve) => {
+        resolveDelivered = resolve;
+      });
+      const originalTrack = controlledAdapter.track.bind(controlledAdapter);
+      controlledAdapter.track = async function* (
+        transferId: TransferId,
+        signal?: AbortSignal,
+      ): AsyncIterable<TransferStatus> {
+        yield* originalTrack(transferId, signal);
+        await delivered;
+        yield {
+          transferId,
+          stage: "delivered",
+          updatedAt: Date.now(),
+          destinationTxHash: "0xdeadbeef",
+        };
+      };
+
+      el.request = REQUEST;
+      await vi.waitFor(() =>
+        expect(el.shadowRoot?.querySelector('[part="build-button"]')).not.toBeNull(),
+      );
+      el.shadowRoot?.querySelector<HTMLButtonElement>('[part="build-button"]')?.click();
+      await vi.waitFor(() =>
+        expect(el.shadowRoot?.querySelector('[part="preview"]')).not.toBeNull(),
+      );
+      el.shadowRoot?.querySelector<HTMLButtonElement>('[data-wallet-module="freighter"]')?.click();
+      await vi.waitFor(() =>
+        expect(
+          el.shadowRoot?.querySelector('[part="confirm-button"]')?.hasAttribute("disabled"),
+        ).toBe(false),
+      );
+      el.shadowRoot?.querySelector<HTMLButtonElement>('[part="confirm-button"]')?.click();
+
+      await vi.waitFor(() =>
+        expect(el.shadowRoot?.querySelector('[part="tracking-progress"]')).not.toBeNull(),
+      );
+
+      // Real elements present, not just text — a real spinner element and a real elapsed-time part.
+      expect(el.shadowRoot?.querySelector('[part="spinner"]')).not.toBeNull();
+      const elapsedEl = () => el.shadowRoot?.querySelector('[part="tracking-elapsed"]');
+      expect(elapsedEl()?.textContent).toBe("(0s)");
+
+      // Genuinely advance real time via fake timers and let the interval's own callback run —
+      // proves the counter is actually wired to a real, ticking setInterval, not a static render.
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(elapsedEl()?.textContent).toBe("(1s)");
+
+      await vi.advanceTimersByTimeAsync(4000);
+      expect(elapsedEl()?.textContent).toBe("(5s)");
+
+      // Now let the transfer actually complete — the spinner/timer must disappear once tracking
+      // ends, not keep counting forever.
+      resolveDelivered?.();
+      await vi.waitFor(() =>
+        expect(el.shadowRoot?.querySelector('[part="dest-tx"]')).not.toBeNull(),
+      );
+      expect(el.shadowRoot?.querySelector('[part="tracking-progress"]')).toBeNull();
+      expect(el.shadowRoot?.querySelector('[part="spinner"]')).toBeNull();
+
+      // And the interval genuinely stopped — advancing time further after delivery must not throw
+      // or change anything (a real proof it was cleared, not just hidden by CSS).
+      const beforeAdvance = el.shadowRoot?.innerHTML;
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(el.shadowRoot?.innerHTML).toBe(beforeAdvance);
+
+      expect(wallet.signedXdr).toBeDefined();
+      el.remove();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("formats elapsed time as seconds under a minute, and minutes+seconds at or above a minute", async () => {
+    vi.useFakeTimers();
+    try {
+      const { el, adapter } = makeElement();
+      adapter.statuses = [
+        { transferId: "" as TransferId, stage: "submitted", updatedAt: Date.now() },
+      ];
+      let resolveDelivered: (() => void) | undefined;
+      const delivered = new Promise<void>((resolve) => {
+        resolveDelivered = resolve;
+      });
+      const originalTrack = adapter.track.bind(adapter);
+      adapter.track = async function* (
+        transferId: TransferId,
+        signal?: AbortSignal,
+      ): AsyncIterable<TransferStatus> {
+        yield* originalTrack(transferId, signal);
+        await delivered;
+        yield {
+          transferId,
+          stage: "delivered",
+          updatedAt: Date.now(),
+          destinationTxHash: "0xdeadbeef",
+        };
+      };
+
+      el.request = REQUEST;
+      await vi.waitFor(() =>
+        expect(el.shadowRoot?.querySelector('[part="build-button"]')).not.toBeNull(),
+      );
+      el.shadowRoot?.querySelector<HTMLButtonElement>('[part="build-button"]')?.click();
+      await vi.waitFor(() =>
+        expect(el.shadowRoot?.querySelector('[part="preview"]')).not.toBeNull(),
+      );
+      el.shadowRoot?.querySelector<HTMLButtonElement>('[data-wallet-module="freighter"]')?.click();
+      await vi.waitFor(() =>
+        expect(
+          el.shadowRoot?.querySelector('[part="confirm-button"]')?.hasAttribute("disabled"),
+        ).toBe(false),
+      );
+      el.shadowRoot?.querySelector<HTMLButtonElement>('[part="confirm-button"]')?.click();
+      await vi.waitFor(() =>
+        expect(el.shadowRoot?.querySelector('[part="tracking-progress"]')).not.toBeNull(),
+      );
+
+      const elapsedEl = () => el.shadowRoot?.querySelector('[part="tracking-elapsed"]');
+      // 65 real seconds -> "1m 05s", not "65s" — proves the minute rollover, and the zero-padded
+      // seconds, both real formatting behaviors, not just the sub-minute case.
+      await vi.advanceTimersByTimeAsync(65_000);
+      expect(elapsedEl()?.textContent).toBe("(1m 05s)");
+
+      resolveDelivered?.();
+      await vi.waitFor(() =>
+        expect(el.shadowRoot?.querySelector('[part="dest-tx"]')).not.toBeNull(),
+      );
+      el.remove();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

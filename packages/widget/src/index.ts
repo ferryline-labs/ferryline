@@ -227,6 +227,26 @@ export class FerrylineWidget extends HTMLElement {
   #request: TransferRequest | undefined;
   #abort: AbortController | undefined;
   /**
+   * When the current transfer's `tracking` phase began, `undefined` outside it. `track()`'s own
+   * polling loop yields a new status only when Circle's attestation service or the destination
+   * chain actually changes state — real, observed gaps between updates during this project's own
+   * testing have run into multiple minutes (Circle's Iris attestation alone, before any
+   * destination-chain completion, is not instant), and the render loop only otherwise redraws on a
+   * real phase transition. Without an independent visual signal, a user watching this has no way to
+   * tell "still working, this can genuinely take a few minutes" apart from "stuck" — see the
+   * `#tickInterval` below, which exists specifically to close that gap.
+   */
+  #trackingStartedAt: number | undefined;
+  /**
+   * Ticks `render()` once a second, ONLY while `#phase.kind === "tracking"`, purely so the elapsed
+   * timer next to the spinner (see `renderPhase`'s own `"tracking"` case) visibly counts up instead
+   * of only updating on the real, infrequent `track()` yields above. Started/stopped centrally in
+   * `setPhase`, the one real choke point every phase transition passes through (see that method's
+   * own doc comment) — not scattered across every call site that can enter or leave `tracking`.
+   * Cleared in `disconnectedCallback` so a removed element never leaks a running interval.
+   */
+  #tickInterval: ReturnType<typeof setInterval> | undefined;
+  /**
    * Real, observed race: `set request` starts a fresh, independent quote/build/sign/submit chain
    * every time it's called, with no cancellation of whatever chain was already in flight. If the
    * caller (e.g. a user giving up on a stuck submission and starting a new transfer) sets `request`
@@ -270,6 +290,7 @@ export class FerrylineWidget extends HTMLElement {
 
   disconnectedCallback(): void {
     this.#abort?.abort();
+    clearInterval(this.#tickInterval);
   }
 
   attributeChangedCallback(): void {
@@ -357,7 +378,24 @@ export class FerrylineWidget extends HTMLElement {
   private setPhase(phase: WidgetPhase): void {
     // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
     console.log(`[ferryline-widget] phase -> ${phase.kind}`, phase);
+    const wasTracking = this.#phase.kind === "tracking";
     this.#phase = phase;
+    if (phase.kind === "tracking" && !wasTracking) {
+      // Entering tracking for this transfer (not just another status update within it, which also
+      // has phase.kind === "tracking" on every trackingUpdated call — wasTracking guards against
+      // resetting the start time and restarting the interval on every real status change).
+      this.#trackingStartedAt = Date.now();
+      clearInterval(this.#tickInterval);
+      this.#tickInterval = setInterval(() => {
+        this.render();
+      }, 1000);
+    } else if (phase.kind !== "tracking" && wasTracking) {
+      // Leaving tracking (delivered, failed, or a stale transfer superseded by a new request) —
+      // stop ticking; the elapsed timer has no reason to keep counting once tracking is over.
+      clearInterval(this.#tickInterval);
+      this.#tickInterval = undefined;
+      this.#trackingStartedAt = undefined;
+    }
     this.render();
   }
 
@@ -740,7 +778,14 @@ export class FerrylineWidget extends HTMLElement {
         return `<p part="status">Step confirmed. Preparing the next step…</p>`;
       case "tracking":
         return `
-          <p part="status">${STAGE_LABELS[phase.status.stage]}</p>
+          <div part="tracking-progress" class="tracking-progress">
+            <span part="spinner" class="spinner" aria-hidden="true"></span>
+            <p part="status">${STAGE_LABELS[phase.status.stage]}${
+              this.#trackingStartedAt !== undefined
+                ? ` <span part="tracking-elapsed" class="tracking-elapsed">(${formatElapsed(Date.now() - this.#trackingStartedAt)})</span>`
+                : ""
+            }</p>
+          </div>
           ${
             phase.status.stage === "verified" && isOutboundCctp(phase.quote)
               ? `<div part="delivery-caveat" class="caveat">${outboundDeliveryCaveat(Boolean(this.relayerUrl), this.#outboundRegistrationResult)}</div>`
@@ -815,6 +860,20 @@ function escapeHtml(text: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+/** `elapsedMs` -> `"12s"` / `"3m 05s"`. Real, live delivery times observed during this project's
+ *  own testing have run from single-digit seconds up to several minutes (Circle's Iris attestation
+ *  alone is not instant, and destination-chain completion adds more on top) — this is deliberately
+ *  plain elapsed time, not a progress percentage, since there is no reliable total duration to
+ *  measure a percentage against (see the `#tickInterval` field's own doc comment). */
+function formatElapsed(elapsedMs: number): string {
+  const totalSeconds = Math.max(0, Math.floor(elapsedMs / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes > 0
+    ? `${String(minutes)}m ${String(seconds).padStart(2, "0")}s`
+    : `${String(seconds)}s`;
 }
 
 /**
