@@ -256,23 +256,33 @@ not an error in the relayer itself.
 
 ### Bootstrapping your first API key
 
-There is no admin endpoint or CLI for creating API keys yet — `POST /transfers` checks a bearer
-token against the `api_keys` table's `key_hash` column directly, so the only way to create one
-today is to insert the SHA-256 hash yourself:
+`POST /transfers` (and every other integrator-facing route) checks a bearer token against the
+`api_keys` table's `key_hash` column. Two admin-only routes manage that table, gated by a separate
+`FERRYLINE_ADMIN_SECRET` (never the same value as any integrator key, checked by a completely
+separate code path — see `requireAdminSecret` in `src/http/auth.ts`), so creating one no longer
+needs direct database access:
 
 ```sh
-docker compose exec postgres psql -U ferryline -d ferryline -c \
-  "INSERT INTO api_keys (key_hash, label) VALUES ('$(echo -n 'your-test-key' | sha256sum | cut -d' ' -f1)', 'local-test');"
+curl -X POST http://localhost:8080/admin/api-keys \
+  -H "Authorization: Bearer $FERRYLINE_ADMIN_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"label": "local-test"}'
+# {"apiKey": "<the real, usable plaintext key — shown exactly once, save it now>", "keyHash": "...", "label": "local-test"}
 ```
 
-Replace `your-test-key` with a real, private value of your own before using this anywhere beyond
-local testing. With a key in place, register a real CCTP burn you've already submitted on a
-supported testnet source chain (`ethereum-sepolia`, `arbitrum-sepolia`, `base-sepolia`, or
-`polygon-amoy` — see `@ferryline/sdk`'s `CCTP_EVM_CHAINS` for the current list):
+The plaintext key is never stored or logged anywhere beyond that one response — there is no way to
+retrieve it again afterward, so copy it immediately. Revoke a key the same way, with
+`DELETE /admin/api-keys/:keyHash`; see the relayer's own README's "Admin: issuing and revoking real
+integrator API keys" section for the full details, including why this stays deliberately minimal
+(no sessions, no integrator-facing self-signup, no key-rotation UI).
+
+With a key in place, register a real CCTP burn you've already submitted on a supported testnet
+source chain (`ethereum-sepolia`, `arbitrum-sepolia`, `base-sepolia`, or `polygon-amoy` — see
+`@ferryline/sdk`'s `CCTP_EVM_CHAINS` for the current list):
 
 ```sh
 curl -X POST http://localhost:8080/transfers \
-  -H "Authorization: Bearer your-test-key" \
+  -H "Authorization: Bearer <the apiKey from the admin response above>" \
   -H "Content-Type: application/json" \
   -d '{
     "transferId": "<a real ULID — see @ferryline/core newTransferId()>",
@@ -304,6 +314,12 @@ non-spend/spend line precisely:
 | `FERRYLINE_NETWORK`         | `"mainnet"` or `"testnet"` — which CCTP network to run against. |
 | `DATABASE_URL`              | A Postgres connection string.                                   |
 | `FERRYLINE_STELLAR_RPC_URL` | The Soroban RPC endpoint to use.                                |
+
+`FERRYLINE_ADMIN_SECRET` is also required, no default — loaded separately in `admin-config.ts`
+rather than `config.ts`, since it isn't relayer-behavior config, it's the credential gating
+`POST`/`DELETE /admin/api-keys` (see [The HTTP API](#the-http-api) below). Listed with the sponsor
+secrets further down, not in the table above, since that's where this README groups it too — it's
+genuinely more sensitive than any single integrator key, not a routine startup setting.
 
 **Required, no default — spend-related (`spend/config.ts`):** these control real money movement,
 so `loadSpendConfig` throws rather than falling back to anything if any of them is unset, empty,
@@ -367,7 +383,7 @@ Deliberately **not** the same config type as the inbound spend vars, even though
 similar — the units genuinely differ (wei vs. stroops), so a Stellar fee-bump cap and an EVM gas
 cap can be configured independently rather than one number meaning two different things.
 
-Two more variables matter for self-hosting but live outside all of the above:
+Three more variables matter for self-hosting but live outside all of the above:
 
 - **`FERRYLINE_SPONSOR_SECRET`** — required, no default, loaded in `src/signer/env-secret-signer.ts`.
   It's the sponsor account's Stellar secret seed (`S...`); every `mint_and_forward` fee-bump is
@@ -377,6 +393,12 @@ Two more variables matter for self-hosting but live outside all of the above:
   enabled, loaded in `src/signer/env-secret-evm-signer.ts`. A `0x`-prefixed 32-byte hex EVM private
   key; every `receiveMessage` gas payment is signed by this account. Same "never a default, never
   commit this" treatment.
+- **`FERRYLINE_ADMIN_SECRET`** — required, no default, loaded in `src/admin-config.ts`. Gates
+  `POST`/`DELETE /admin/api-keys` — see [The HTTP API](#the-http-api) below. Genuinely more
+  sensitive than any single integrator key it can create: anyone holding it can mint unlimited
+  spend-capable keys, all sharing this relayer's one sponsor account and daily spend ceiling. Must
+  be a real, separately-generated value — never reused from either sponsor secret above or from any
+  integrator key. Never commit this value.
 - **`POSTGRES_PASSWORD`** (Docker Compose only, required) and **`POSTGRES_HOST_PORT`** (Docker
   Compose only, default `5432`) — read directly by `docker-compose.yml`, not by the relayer's own
   Node process. `POSTGRES_PASSWORD` is shared between the `postgres` and `relayer` services in the
@@ -384,7 +406,7 @@ Two more variables matter for self-hosting but live outside all of the above:
 
 ## The HTTP API
 
-Three routes total, registered in `src/http/app.ts`. Every route's request/response shape is a zod
+Five routes total, registered in `src/http/app.ts`. Every route's request/response shape is a zod
 schema, wired as both Fastify's validator _and_ serializer compiler — so a malformed request is
 rejected with `400` before the handler ever touches the database or a chain call, and the app's
 global error handler catches any zod validation failure it misses:
@@ -433,6 +455,53 @@ Responses:
 Two more status codes exist in practice but aren't part of this route's own zod `response` schema
 object: `401` (missing/malformed/invalid bearer token, from the `requireApiKey` preHandler) and
 `400` (schema validation failure, from the app-level error handler above).
+
+### `POST /admin/api-keys`
+
+Creates a real, usable integrator API key. **Requires** `Authorization: Bearer <admin secret>` —
+checked by `requireAdminSecret`, a completely separate code path from `requireApiKey` above (see
+[MVP auth](#the-auth-system-is-deliberately-mvp) below). An integrator's own API key never
+authenticates this route, and the admin secret never authenticates `POST /transfers` or any other
+integrator-facing route — there is no shared code between the two checks.
+
+Request body:
+
+| Field   | Type   | Validation                           |
+| ------- | ------ | ------------------------------------ |
+| `label` | string | 1-200 characters, operator-assigned. |
+
+Responses:
+
+| Status | Body                                                 | When                                                         |
+| ------ | ---------------------------------------------------- | ------------------------------------------------------------ |
+| `201`  | `{ apiKey: string, keyHash: string, label: string }` | Created. `apiKey` is the real plaintext, shown exactly once. |
+| `401`  | `{ error: string }`                                  | Missing, malformed, or wrong admin secret.                   |
+| `400`  | `{ error: string }`                                  | Schema validation failure (empty or overlong `label`).       |
+
+`apiKey` is generated with `crypto.randomBytes(32)`, hex-encoded. Only its SHA-256 hash (via the
+same `hashApiKey` function `requireApiKey`'s own lookup uses) is ever persisted — the plaintext is
+never logged or stored anywhere beyond this one response, so there is no way to retrieve it again
+afterward.
+
+### `DELETE /admin/api-keys/:keyHash`
+
+Revokes an integrator API key. **Requires** `Authorization: Bearer <admin secret>`, same
+`requireAdminSecret` check as above.
+
+| Field     | Type   | Validation                                                |
+| --------- | ------ | --------------------------------------------------------- |
+| `keyHash` | string | 64-character lowercase hex (a SHA-256 hash), a URL param. |
+
+Responses:
+
+| Status | Body                | When                                                                |
+| ------ | ------------------- | ------------------------------------------------------------------- |
+| `204`  | (empty)             | Revoked, or `keyHash` didn't match any row — idempotent either way. |
+| `401`  | `{ error: string }` | Missing, malformed, or wrong admin secret.                          |
+| `400`  | `{ error: string }` | `keyHash` isn't a well-formed 64-character hex string.              |
+
+Takes effect immediately: the very next request bearing that key's plaintext is rejected with `401`
+by `requireApiKey`, which already reads `revoked_at IS NULL` on every lookup.
 
 ### `GET /transfers/:id`
 
@@ -526,15 +595,17 @@ These are real limitations of the current implementation, not softened for the d
   > system: no sessions, no scopes, no key rotation UI — just enough to gate who the sponsor
   > account pays gas for.
 
-  Concretely: keys are stored as a SHA-256 hash in the `api_keys` table (never plaintext), but
-  there's no admin endpoint to create, list, or revoke them — see
-  [Bootstrapping your first API key](#bootstrapping-your-first-api-key) above, which is `psql`
-  or nothing today. There's no key rotation flow either; revoking a key means setting its
-  `revoked_at` column directly. One `api_keys` table and one registration-time limiter cover
-  **both** `POST /transfers` and `POST /outbound-transfers` — a key rate-limited on one direction
-  is rate-limited on both, by design, not because the two directions were never distinguished. If
-  you need real multi-tenant auth, session scoping, or a self-service key-management UI, this isn't
-  that yet — treat it as exactly what it says it is, a gate on who the sponsor accounts pay gas for.
+  Concretely: keys are stored as a SHA-256 hash in the `api_keys` table (never plaintext). An
+  admin-only `POST`/`DELETE /admin/api-keys` pair now creates and revokes them (gated by a
+  separate, more sensitive `FERRYLINE_ADMIN_SECRET`) — see
+  [Bootstrapping your first API key](#bootstrapping-your-first-api-key) above. There's still no key
+  rotation flow (revoking and creating a fresh key are two separate calls, not one atomic
+  operation), no listing endpoint, and no scopes. One `api_keys` table and one registration-time
+  limiter cover **both** `POST /transfers` and `POST /outbound-transfers` — a key rate-limited on
+  one direction is rate-limited on both, by design, not because the two directions were never
+  distinguished. If you need real multi-tenant auth, session scoping, key rotation, or
+  integrator-facing self-service, this isn't that yet — treat it as exactly what it says it is, a
+  gate on who the sponsor accounts pay gas for, now provisionable without direct database access.
 
 ## Where to go next
 
@@ -550,10 +621,11 @@ These are real limitations of the current implementation, not softened for the d
 
 This page is grounded in `packages/relayer`'s own README, `OUTBOUND_SCOPE.md`,
 `OUTBOUND_THREAT_MODEL.md`, Docker Compose/Dockerfile setup, `.env.example`, and the source files
-that define its config and HTTP layer for both directions (`config.ts`, `spend/config.ts`,
-`spend/outbound-config.ts`, `http/app.ts`, `http/routes/*.ts`, `http/schemas.ts`,
-`http/outbound-schemas.ts`, `http/auth.ts`, `spend/registration-limit.ts`,
-`signer/env-secret-evm-signer.ts`) — all read directly for this page (this page was rewritten once
+that define its config and HTTP layer for both directions (`config.ts`, `admin-config.ts`,
+`spend/config.ts`, `spend/outbound-config.ts`, `http/app.ts`, `http/routes/*.ts` (including
+`admin-api-keys.ts`), `http/schemas.ts`, `http/outbound-schemas.ts`, `http/auth.ts`,
+`spend/registration-limit.ts`, `signer/env-secret-evm-signer.ts`) — all read directly for this page
+(this page was rewritten once
 already, against real, current `origin/main`, after an earlier draft was found to have been written
 against a commit that predated the outbound direction and CORS support entirely — see the earlier
 draft's own now-corrected claims if you're diffing history). Two things worth flagging rather than

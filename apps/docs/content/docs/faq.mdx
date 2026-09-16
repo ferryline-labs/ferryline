@@ -76,9 +76,11 @@ an "MVP bearer-token allow-list", adding:
 > Per the phase-3 sign-off, this is deliberately NOT a full auth system: no sessions, no scopes, no
 > key rotation UI — just enough to gate who the sponsor account pays gas for.
 
-Keys are stored as a SHA-256 hash (never plaintext) in the `api_keys` table, and there's no admin
-endpoint to create or revoke one yet — the relayer's own README documents inserting a row directly
-with `psql` for local testing. See [`/docs/relayer`](/docs/relayer).
+Keys are stored as a SHA-256 hash (never plaintext) in the `api_keys` table. Still deliberately
+minimal, still no sessions, scopes, or key-rotation UI, but there is now an admin endpoint
+(`POST`/`DELETE /admin/api-keys`, gated by a separate `FERRYLINE_ADMIN_SECRET`) for creating and
+revoking a real key without needing direct database access — see the relayer's own README's
+"Admin: issuing and revoking real integrator API keys" section. See [`/docs/relayer`](/docs/relayer).
 
 ## Why does a whole batch payout revert if just one leg fails?
 
