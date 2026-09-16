@@ -141,18 +141,7 @@ export function createWidgetClient(config: WidgetClientConfig): WidgetClient {
           "submitStellarTransaction: expected a plain (non-fee-bump) transaction envelope",
         );
       }
-      // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
-      console.log(
-        "[ferryline-widget client] submitStellarTransaction: parsed tx, local hash =",
-        Buffer.from(tx.hash()).toString("hex"),
-      );
       const hash = await submitStellarTransactionWithRejectionRecheck(server, tx);
-      // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
-      console.log(
-        "[ferryline-widget client] submitStellarTransactionWithRejectionRecheck resolved, hash =",
-        hash,
-        "now waiting for confirmation before returning",
-      );
       // Real, load-bearing wait: `sendTransaction` returns as soon as the network accepts the
       // envelope into its mempool, well before ledger inclusion — NOT confirmation. A caller that
       // treats this hash as "confirmed" and immediately calls `prepareStep` for a step whose build
@@ -229,25 +218,12 @@ export async function submitStellarTransactionWithRejectionRecheck(
 
   let lastRejection: unknown;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
-    console.log(
-      `[ferryline-widget client] submitStellarTransactionWithRejectionRecheck: attempt ${String(attempt + 1)}/${String(maxAttempts)}, calling sendTransaction`,
-    );
     const sent = await server.sendTransaction(tx);
-    // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
-    console.log(
-      `[ferryline-widget client] sendTransaction responded with status = ${sent.status}`,
-      sent,
-    );
     if (sent.status === "PENDING" || sent.status === "DUPLICATE") {
       return hash;
     }
     lastRejection = new Error(
       `submission rejected: ${sent.status}${"errorResult" in sent && sent.errorResult ? ` (${sent.errorResult.toXDR("base64")})` : ""}`,
-    );
-    // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
-    console.log(
-      `[ferryline-widget client] rejected (${sent.status}), rechecking real on-chain state via getTransaction before giving up. hash = ${hash}`,
     );
     // Rejected (this attempt's own view) — before giving up, check real on-chain state directly, at
     // the same generous budget the success path already trusts: maybe it landed anyway (the
@@ -259,10 +235,6 @@ export async function submitStellarTransactionWithRejectionRecheck(
         hash,
         confirmationMaxAttempts,
         confirmationPollIntervalMs,
-      );
-      // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
-      console.log(
-        `[ferryline-widget client] on-chain recheck resolved with status = ${status} (rejection was likely spurious if SUCCESS)`,
       );
       if (status === "SUCCESS") {
         return hash;
@@ -276,17 +248,8 @@ export async function submitStellarTransactionWithRejectionRecheck(
       // this function's own outer retry rather than surfacing this timeout directly, so a resubmit
       // is attempted before giving up entirely.
       if (!(confirmError instanceof Error) || !confirmError.message.includes("not found after")) {
-        // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
-        console.log(
-          "[ferryline-widget client] on-chain recheck found a DEFINITE outcome (not a timeout), surfacing as failure",
-          confirmError,
-        );
         throw confirmError;
       }
-      // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
-      console.log(
-        `[ferryline-widget client] on-chain recheck timed out (still not found), ${attempt + 1 < maxAttempts ? "will resubmit" : "out of attempts, giving up"}`,
-      );
     }
   }
   throw lastRejection instanceof Error
@@ -309,10 +272,6 @@ export async function waitForStellarConfirmation(
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
     const result = await server.getTransaction(hash);
-    // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
-    console.log(
-      `[ferryline-widget client] waitForStellarConfirmation poll ${String(attempt + 1)}/${String(maxAttempts)} (hash ${hash}): ${result.status}`,
-    );
     if (result.status !== Api.GetTransactionStatus.NOT_FOUND) {
       return result.status;
     }
@@ -360,11 +319,6 @@ export async function pollPrepareStep<T>(
       if (!isRetriable(error) || attempt === maxAttempts - 1) {
         throw error;
       }
-      // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
-      console.log(
-        `[ferryline-widget client] pollPrepareStep retriable failure on attempt ${String(attempt + 1)}/${String(maxAttempts)}, waiting ${String(pollIntervalMs)}ms before retry:`,
-        error instanceof Error ? error.message : error,
-      );
       await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
     }
   }

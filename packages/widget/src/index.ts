@@ -376,8 +376,6 @@ export class FerrylineWidget extends HTMLElement {
   }
 
   private setPhase(phase: WidgetPhase): void {
-    // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
-    console.log(`[ferryline-widget] phase -> ${phase.kind}`, phase);
     const wasTracking = this.#phase.kind === "tracking";
     this.#phase = phase;
     if (phase.kind === "tracking" && !wasTracking) {
@@ -410,11 +408,6 @@ export class FerrylineWidget extends HTMLElement {
    */
   private setPhaseIfCurrent(phase: WidgetPhase, generation: number): void {
     if (generation !== this.#requestGeneration) {
-      // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
-      console.log(
-        `[ferryline-widget] DROPPED stale phase -> ${phase.kind} (generation ${String(generation)}, current is ${String(this.#requestGeneration)})`,
-        phase,
-      );
       return;
     }
     this.setPhase(phase);
@@ -453,16 +446,10 @@ export class FerrylineWidget extends HTMLElement {
   // ---- Wallet connect (STEP 2B) ----------------------------------------------------------------
 
   private async connectWallet(moduleId?: string): Promise<void> {
-    // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
-    console.log(`[ferryline-widget] connectWallet(${moduleId ?? "<default>"}) starting`);
     try {
       this.#connected = await this.wallet().connect(moduleId);
-      // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
-      console.log("[ferryline-widget] connectWallet succeeded", this.#connected);
       this.render();
     } catch (error) {
-      // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
-      console.log("[ferryline-widget] connectWallet FAILED", error);
       // Connection failures render inline rather than forcing a phase transition — the user may
       // still be mid-quote/build and a wallet reconnect shouldn't discard that state.
       this.renderError(`Wallet connection failed: ${message(error)}`);
@@ -478,13 +465,7 @@ export class FerrylineWidget extends HTMLElement {
   // `wallet().signTransaction` directly — every signing call in this class is gated through here.
 
   private async confirmAndSign(): Promise<void> {
-    // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
-    console.log("[ferryline-widget] confirmAndSign() called, current phase:", this.#phase.kind);
     if (this.#phase.kind !== "preview") {
-      // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
-      console.log(
-        "[ferryline-widget] confirmAndSign() no-op: phase is not 'preview' (button should have been unclickable)",
-      );
       return; // structurally unreachable via the UI; defensive no-op if called out of order.
     }
     // Captured up front: this whole flow (through wallet signing, RPC submission, and the retry/
@@ -496,11 +477,6 @@ export class FerrylineWidget extends HTMLElement {
     const signingPhase = confirmPreviewAndSign(this.#phase);
     this.setPhase(signingPhase);
     if (signingPhase.kind !== "signing") {
-      // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
-      console.log(
-        "[ferryline-widget] confirmAndSign() no-op: confirmPreviewAndSign did not produce a signing phase",
-        signingPhase,
-      );
       return;
     }
     const { quote, built, stepIndex } = signingPhase;
@@ -515,29 +491,10 @@ export class FerrylineWidget extends HTMLElement {
     try {
       if (step.kind === "stellar-transaction") {
         const client = this.client();
-        // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
-        console.log(
-          `[ferryline-widget] step ${String(stepIndex)}: requesting wallet signature (this is what shows the Freighter popup)`,
-        );
         const signedXdr = await this.wallet().signTransaction(step.xdr, client.networkPassphrase);
-        // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
-        console.log(`[ferryline-widget] step ${String(stepIndex)}: wallet signature received`);
-        // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
-        console.log(
-          `[ferryline-widget] step ${String(stepIndex)}: submitting signed transaction to Stellar RPC`,
-        );
         const sourceTxHash = await client.submitStellarTransaction(signedXdr);
-        // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
-        console.log(
-          `[ferryline-widget] step ${String(stepIndex)}: submitStellarTransaction resolved, hash =`,
-          sourceTxHash,
-        );
         await client.ferryline.markSubmitted(built.transferId, sourceTxHash);
-        // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
-        console.log(`[ferryline-widget] step ${String(stepIndex)}: markSubmitted done`);
         await this.afterStepSubmitted(quote, built, stepIndex, generation);
-        // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
-        console.log(`[ferryline-widget] step ${String(stepIndex)}: afterStepSubmitted done`);
       } else if (step.kind === "evm-transaction") {
         throw new Error(
           "EVM-side signing (inbound builds) is driven by the sending chain's own wallet, outside this widget's Stellar-wallet session — see relayer.ts's registerTransfer for the inbound flow this widget drives after that external signature.",
@@ -546,8 +503,6 @@ export class FerrylineWidget extends HTMLElement {
         throw new Error(`cannot sign a deferred step directly at index ${String(stepIndex)}`);
       }
     } catch (error) {
-      // eslint-disable-next-line no-console -- temporary diagnostic logging, see PR description
-      console.log(`[ferryline-widget] step ${String(stepIndex)}: FAILED`, error);
       this.setPhaseIfCurrent(signFailed({ quote, built }, message(error)), generation);
     }
   }
