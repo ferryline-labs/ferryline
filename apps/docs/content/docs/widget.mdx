@@ -301,13 +301,23 @@ override `position` / `inset` on the `ferryline-widget` element itself — the c
 
 ## `::part()` selectors
 
-Shadow-DOM `part` attributes are exposed for deeper styling with `::part()`. There are 22 of them,
+Shadow-DOM `part` attributes are exposed for deeper styling with `::part()`. There are 25 of them,
 read directly from `src/index.ts`:
 
 `shell`, `network`, `wallet-error`, `inbound-status`, `status`, `quote`, `preview`,
 `preview-heading`, `preview-summary`, `decoded-call`, `wallet-connect`, `wallet-module-button`,
-`build-button`, `cancel-button`, `confirm-button`, `source-tx`, `dest-tx`, `delivery-caveat`,
-`failure`, `reset-button`, `faucets`, `faucet-link`
+`build-button`, `cancel-button`, `confirm-button`, `tracking-progress`, `spinner`,
+`tracking-elapsed`, `source-tx`, `dest-tx`, `delivery-caveat`, `failure`, `reset-button`,
+`faucets`, `faucet-link`
+
+`tracking-progress`/`spinner`/`tracking-elapsed` are the visual "still working" signal during the
+`tracking` phase — a plain, indeterminate CSS spinner plus a live, ticking elapsed-time counter
+(`(12s)`, `(1m 05s)`), closing a real gap: `track()`'s own polling loop can genuinely go minutes
+between real status updates (Circle's Iris attestation alone is not instant), and without a visual
+signal a user watching this has no way to tell "still working" apart from "stuck." Deliberately
+indeterminate, not a real progress percentage — there is no reliable total duration for a real
+delivery to measure a percentage against. Respects `prefers-reduced-motion`: the spinner's rotation
+stops, the elapsed-time text still updates.
 
 ```css
 ferryline-widget::part(shell) {

@@ -147,9 +147,14 @@ embedding the widget inside your own bottom-sheet container at that width, overr
 
 Shadow-DOM `part` attributes are also exposed for deeper styling via `::part()`: `shell`, `network`,
 `status`, `quote`, `preview`, `preview-heading`, `preview-summary`, `decoded-call`, `wallet-connect`,
-`wallet-module-button`, `build-button`, `confirm-button`, `cancel-button`, `reset-button`,
-`source-tx`, `dest-tx`, `failure`, `faucets`, `faucet-link`, `wallet-error`, `inbound-status`,
-`delivery-caveat`.
+`wallet-module-button`, `build-button`, `confirm-button`, `cancel-button`, `tracking-progress`,
+`spinner`, `tracking-elapsed`, `reset-button`, `source-tx`, `dest-tx`, `failure`, `faucets`,
+`faucet-link`, `wallet-error`, `inbound-status`, `delivery-caveat`.
+
+`tracking-progress`/`spinner`/`tracking-elapsed`: a plain, indeterminate CSS spinner plus a live,
+ticking elapsed-time counter shown during the `tracking` phase, since `track()`'s own polling loop
+can genuinely go minutes between real status updates — see `src/index.ts`'s `#tickInterval` doc
+comment for the full reasoning. Respects `prefers-reduced-motion`.
 
 ## Outbound CCTP delivery: automatic relay now exists, still not a guaranteed SLA (updated)
 

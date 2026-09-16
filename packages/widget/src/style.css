@@ -62,6 +62,63 @@
   @apply mt-2 break-all font-mono text-xs text-on-surface-weak;
 }
 
+/* Indeterminate, not a real progress percentage — see formatElapsed's own doc comment in index.ts
+   for why: there is no reliable total duration for a real CCTP/USDT0 delivery to measure a
+   percentage against, only real elapsed time. A spinning ring plus a live "(Xs)"/"(Xm 0Ys)" counter
+   next to the status text, closing a real gap: track()'s own polling loop can genuinely go minutes
+   between real status changes (Circle's Iris attestation alone is not instant), and without a
+   visual, ticking signal a user watching this has no way to tell "still working, this can
+   genuinely take a few minutes" apart from "stuck." */
+.tracking-progress {
+  @apply my-2 flex items-center gap-2;
+}
+
+.spinner {
+  /* Two real bugs, found and fixed before shipping, not one:
+     1. `border-top-color: var(--ferryline-fg, theme(colors.brand))` looked like a sensible
+        fallback, but `:host` (above) always sets --ferryline-fg to a real value
+        (theme(colors.on-surface-dark), near-black, by default), so that CSS-var fallback never
+        actually triggered.
+     2. The real, load-bearing one: Tailwind's border-* utilities (border-2, border-on-surface-weaker,
+        border-t-brand) emit `border-style: var(--tw-border-style)`, relying on a
+        `@property --tw-border-style { ... initial-value: solid }` registration elsewhere in the
+        stylesheet to supply the fallback — the EXACT SAME limitation this file's own
+        `button:focus-visible` comment already documents for `outline-style`: a custom property
+        registered via `@property` inside a dynamically-injected shadow-root <style> tag does not
+        actually take effect for elements in that shadow root, confirmed directly in that earlier
+        case. `--tw-border-style` resolves empty, so `border-style` computes to its CSS-wide default
+        (`none`), and the spinner's ring never rendered at all — not a color/contrast issue, an
+        invisible border. Plain, literal `border: ...` sidesteps the indirection entirely, the same
+        fix already applied to `button:focus-visible`'s `outline`, for the identical reason. */
+  display: inline-block;
+  height: theme(spacing.4);
+  width: theme(spacing.4);
+  flex: none;
+  border-radius: 9999px;
+  border: 2px solid theme(colors.on-surface-weaker);
+  border-top-color: theme(colors.brand);
+  animation: ferryline-spin 0.8s linear infinite;
+}
+
+@keyframes ferryline-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.tracking-elapsed {
+  @apply font-mono text-xs text-on-surface-weak;
+}
+
+/* Real, honest constraint any consumer's own theme should respect, not an oversight: a user who
+   has set prefers-reduced-motion genuinely should not see a continuously-spinning element. The
+   elapsed-time text alone still conveys real progress in that case. */
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
+}
+
 /* Rounded, input-style rows for each amount/value shown to the user — the reference's own
    "distinct field" treatment, not plain inline text. Each row is its own light-gray pill with the
    label above/beside the value, spaced generously (my-2, not the old dense my-0 stack). */
