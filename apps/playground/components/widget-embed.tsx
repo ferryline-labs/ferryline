@@ -106,7 +106,7 @@ export function WidgetEmbed(): ReactElement {
         USDT0 isn&apos;t offered here: it has no Stellar testnet deployment to test against, so the
         adapter refuses to pretend otherwise. Every real USDT0 transfer is mainnet activity — see{" "}
         <a
-          href="https://ferryline-docs.vercel.app/core-concepts#the-two-rails"
+          href="https://ferryline-docs.vercel.app/docs/core-concepts#the-two-rails"
           className="underline"
         >
           Core Concepts
