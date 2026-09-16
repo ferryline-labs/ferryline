@@ -3,6 +3,28 @@
 All notable changes to `@ferryline/widget` are documented in this file. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## 0.1.4 (2026-09-16)
+
+### Added
+
+- **A visual "still working" signal during the `tracking` phase**: an indeterminate spinner plus a
+  live, ticking elapsed-time counter (`(12s)`, `(1m 05s)`) next to the status text. Closes a real
+  gap: `track()`'s own polling loop only yields a new status when Circle's attestation service or
+  the destination chain actually changes state, real, observed gaps between updates have run into
+  multiple minutes, and without an independent visual signal a user watching this phase had no way
+  to tell "still working" apart from "stuck." New `::part()` selectors: `tracking-progress`,
+  `spinner`, `tracking-elapsed`. Respects `prefers-reduced-motion` (the spinner's rotation stops;
+  the elapsed-time text still updates).
+
+  Two real bugs found and fixed via live browser testing before this shipped, not caught by the
+  unit test suite (jsdom doesn't render real CSS the way an actual browser does): a CSS-var
+  fallback for the spinner's color that never actually triggered, and the real, load-bearing one,
+  Tailwind's `border-*` utilities depend on an `@property` registration that does not take effect
+  inside a dynamically-injected shadow-root `<style>` tag (the exact same limitation this file's
+  own `button:focus-visible` rule had already hit once before for `outline-style`). The spinner's
+  ring never rendered at all until switched to plain, literal CSS. Both fixed the same way that
+  earlier case was.
+
 ## 0.1.3 (2026-09-16)
 
 ### Fixed
