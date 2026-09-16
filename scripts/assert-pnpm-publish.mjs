@@ -26,6 +26,23 @@
 // same unrewritten, broken result being checked for — a false negative that would pass every time
 // it needs to fail. The env-var check has no such blind spot: it identifies the CURRENTLY RUNNING
 // tool directly, not a downstream artifact of it.
+//
+// SECOND real incident this now also prevents, found the same day the first was fixed:
+// @ferryline/widget@0.1.2 was published with a STALE dist/ — the real pollPrepareStep fix was
+// merged to main and `git pull`'d locally, but the publisher's own dist/index.js on disk still
+// predated that pull (last built before the merge, never rebuilt after), and `pnpm run
+// publish:widget` packed whatever was on disk without checking it was current. Confirmed directly:
+// the published tarball's dist/index.js still contained the old, already-proven-broken
+// POST_APPROVE_BUILD_DELAY_MS fixed timer, not the fix the version bump claimed to ship. Neither
+// `core` nor `sdk` had ever guarded against this either — their own prepack scripts (see
+// scripts/prepare-publish.mjs) only strip non-shippable script names from the manifest, they never
+// touch dist/ at all. This was true of every prior successful publish too: dist/ happened to
+// already be fresh by luck/discipline, never by a real guardrail. Fixed below by rebuilding for
+// real, from the CURRENT checked-out source, every time, right before packing — this makes "the
+// dist/ that gets packed doesn't match the source that was just reviewed/merged" structurally
+// impossible, the same way the pnpm-vs-npm check above makes the workspace:* class impossible.
+import { execFileSync } from "node:child_process";
+
 const userAgent = process.env.npm_config_user_agent ?? "";
 
 if (!userAgent.startsWith("pnpm/")) {
@@ -50,6 +67,30 @@ if (!userAgent.startsWith("pnpm/")) {
       "    pnpm run publish:widget   # for packages/widget (once it has its first real release)",
       "",
       "  Or directly: pnpm --filter <package-name> publish",
+      "",
+    ].join("\n"),
+  );
+  process.exit(1);
+}
+
+// Rebuilds THIS package (the one whose prepublishOnly invoked this script — cwd is that package's
+// own directory, since npm/pnpm run lifecycle scripts from the package root) from the real, current
+// checked-out source, every time, right before pnpm assembles the tarball. Uses each package's own
+// real "build" script (already proven to work — the same one CI and local development already run),
+// not a duplicated build command here, so a future change to how a package builds only needs
+// updating in one place.
+console.error("📦 Rebuilding from current source before packing (prepublishOnly)…");
+try {
+  execFileSync("pnpm", ["run", "build"], { stdio: "inherit" });
+} catch {
+  console.error(
+    [
+      "",
+      "✖ Refusing to publish: the rebuild above failed.",
+      "",
+      "  Fix the build error and try again. Publishing a package whose dist/ failed",
+      "  to build from the current source would ship either stale or broken output —",
+      "  neither is acceptable.",
       "",
     ].join("\n"),
   );

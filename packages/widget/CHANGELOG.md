@@ -3,6 +3,43 @@
 All notable changes to `@ferryline/widget` are documented in this file. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## 0.1.3 (2026-09-16)
+
+### Fixed
+
+- **`0.1.2` was published with a stale `dist/`.** The `pollPrepareStep` fix documented below was
+  genuinely merged to `main` and pulled locally before publishing, but the publisher's own
+  `dist/index.js` on disk still predated that pull — last built before the merge, never rebuilt
+  after — and `pnpm run publish:widget` packed whatever was on disk without checking it was
+  current. Confirmed directly: the real `0.1.2` tarball on npm still contained the old,
+  already-proven-broken `POST_APPROVE_BUILD_DELAY_MS` fixed timer, not the fix the version bump
+  claimed to ship. Found via a real outside-the-monorepo install and a direct `grep` of the
+  installed `dist/index.js`, the same verification step every publish in this project is supposed
+  to get, this time catching a real miss.
+
+  **Root cause, broader than just this package:** neither `@ferryline/core` nor `@ferryline/sdk`
+  had ever guarded against this either — their own `prepack` scripts
+  (`scripts/prepare-publish.mjs`) only strip non-shippable script names from the manifest before
+  packing, they never touch `dist/` at all. Every prior successful publish across all three
+  packages worked only because `dist/` happened to already be fresh by luck or discipline, never
+  because of a real guardrail. This is a structural gap, not a one-off mistake.
+
+  **Fixed at the root**, in the one shared script every publishable package's `prepublishOnly`
+  already runs (`scripts/assert-pnpm-publish.mjs`): after confirming the invoking tool is really
+  `pnpm` (the original `0.1.2`-class fix), it now also runs the package's own real `build` script
+  before pnpm packs anything. A failing rebuild refuses the publish outright rather than shipping
+  stale-or-broken output. This closes the gap for `core` and `sdk` too, not just the widget.
+  Verified directly: deliberately staled `dist/index.js` with a marker string, ran the gate under a
+  simulated `pnpm` invocation, confirmed the marker was gone and the real fix was present
+  afterward; separately, deliberately broke the build with a real syntax error and confirmed the
+  gate refuses to publish (exit code 1) rather than packing broken output.
+
+  **`0.1.2` is not marked as completely broken** the way `@ferryline/sdk@0.1.2` was: the package
+  still installs and imports correctly, and does carry the real `0.1.1` ESM-interop fix — it is
+  specifically missing the `pollPrepareStep` fix below, silently running the old fixed-timer
+  mechanism instead. If you installed `0.1.2` and rely on the outbound CCTP two-step flow,
+  upgrade to `0.1.3`.
+
 ## 0.1.2 (2026-09-16)
 
 ### Fixed
